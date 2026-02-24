@@ -1,7 +1,7 @@
-import { initializeApp, getApps, getApp } from 'firebase/app'
+import { initializeApp, getApps, getApp, type FirebaseApp } from 'firebase/app'
 import { getFirestore } from 'firebase/firestore'
 import { getStorage } from 'firebase/storage'
-import { getAuth } from 'firebase/auth'
+import { getAuth, type Auth } from 'firebase/auth'
 import { getMessaging, isSupported, type Messaging } from 'firebase/messaging'
 
 export const firebaseConfig = {
@@ -13,11 +13,23 @@ export const firebaseConfig = {
   appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID || '',
 }
 
-const app = getApps().length ? getApp() : initializeApp(firebaseConfig)
+let app: FirebaseApp
+try {
+  app = getApps().length ? getApp() : initializeApp(firebaseConfig)
+} catch {
+  app = initializeApp(firebaseConfig)
+}
 
 export const db = getFirestore(app)
 export const storage = getStorage(app)
-export const auth = getAuth(app)
+
+let auth: Auth
+try {
+  auth = getAuth(app)
+} catch {
+  auth = {} as Auth
+}
+export { auth }
 
 let messagingPromise: Promise<Messaging | null> | null = null
 
