@@ -1,11 +1,10 @@
 'use client'
 
-import { useState, useEffect } from 'react'
-import { collection, doc, onSnapshot, query, orderBy, limit as firestoreLimit } from 'firebase/firestore'
-import { db } from '@/lib/firebaseClient'
+import { useState, useEffect, useCallback } from 'react'
 import { CreditCard, TrendingUp, TrendingDown, Wallet } from 'lucide-react'
 import type { Organization } from '@/types/organization'
 import type { CreditBalance, CreditTransaction } from '@/types/credits'
+import { useCrmUser } from '@/contexts/CrmUserContext'
 
 const TYPE_LABELS: Record<CreditTransaction['type'], string> = {
   purchase: 'Compra',
@@ -22,6 +21,7 @@ const TYPE_BADGE: Record<CreditTransaction['type'], string> = {
 }
 
 export default function SuperAdminCreditosPage() {
+  const { userEmail } = useCrmUser()
   const [orgs, setOrgs] = useState<Organization[]>([])
   const [selectedOrgId, setSelectedOrgId] = useState('')
   const [balance, setBalance] = useState<CreditBalance | null>(null)
@@ -35,37 +35,37 @@ export default function SuperAdminCreditosPage() {
   const [error, setError] = useState('')
 
   useEffect(() => {
-    const q = query(collection(db, 'organizations'), orderBy('name'))
-    const unsub = onSnapshot(q, (snap) => {
-      setOrgs(snap.docs.map((d) => ({ id: d.id, ...d.data() })) as Organization[])
-      setLoadingOrgs(false)
+    if (!userEmail) return
+    fetch('/api/super-admin/credits', {
+      headers: { 'x-user-email': userEmail },
     })
-    return () => unsub()
-  }, [])
+      .then((res) => res.json())
+      .then((data) => setOrgs((data.orgs || []) as Organization[]))
+      .catch((err) => console.error('[super-admin/creditos] fetch orgs error:', err))
+      .finally(() => setLoadingOrgs(false))
+  }, [userEmail])
+
+  const fetchOrgData = useCallback(async (orgId: string) => {
+    if (!userEmail || !orgId) return
+    setLoadingBalance(true)
+    try {
+      const res = await fetch(`/api/super-admin/credits?orgId=${orgId}`, {
+        headers: { 'x-user-email': userEmail },
+      })
+      const data = await res.json()
+      setBalance((data.balance as CreditBalance) || null)
+      setTransactions((data.transactions || []) as CreditTransaction[])
+    } catch (err) {
+      console.error('[super-admin/creditos] fetch org data error:', err)
+    } finally {
+      setLoadingBalance(false)
+    }
+  }, [userEmail])
 
   useEffect(() => {
     if (!selectedOrgId) { setBalance(null); setTransactions([]); return }
-    setLoadingBalance(true)
-
-    const unsubBalance = onSnapshot(
-      doc(db, 'organizations', selectedOrgId, 'credits', 'balance'),
-      (snap) => {
-        setBalance(snap.exists() ? (snap.data() as CreditBalance) : null)
-        setLoadingBalance(false)
-      }
-    )
-
-    const txQuery = query(
-      collection(db, 'organizations', selectedOrgId, 'creditTransactions'),
-      orderBy('createdAt', 'desc'),
-      firestoreLimit(50)
-    )
-    const unsubTx = onSnapshot(txQuery, (snap) => {
-      setTransactions(snap.docs.map((d) => ({ id: d.id, ...d.data() } as CreditTransaction)))
-    })
-
-    return () => { unsubBalance(); unsubTx() }
-  }, [selectedOrgId])
+    fetchOrgData(selectedOrgId)
+  }, [selectedOrgId, fetchOrgData])
 
   const handleAddCredits = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -77,7 +77,7 @@ export default function SuperAdminCreditosPage() {
     try {
       const res = await fetch('/api/super-admin/credits', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'x-user-email': userEmail || '' },
         body: JSON.stringify({
           orgId: selectedOrgId,
           amount: num,
@@ -87,6 +87,7 @@ export default function SuperAdminCreditosPage() {
       if (!res.ok) throw new Error((await res.json()).error || 'Erro')
       setAmount('')
       setDescription('')
+      fetchOrgData(selectedOrgId)
     } catch (err: any) {
       setError(err.message)
     } finally {
