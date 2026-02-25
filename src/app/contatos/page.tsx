@@ -1039,16 +1039,6 @@ export default function ContatosPage() {
               <span className="hidden sm:inline">Importar</span>
             </button>
 
-            {/* Upload Partners Button */}
-            <button
-              onClick={() => setShowPartnersModal(true)}
-              className="flex items-center gap-2 px-3.5 py-2.5 text-sm font-medium text-slate-600 bg-white border border-slate-200 hover:bg-slate-50 hover:border-slate-300 rounded-xl transition-all shadow-sm"
-              title="Importar sócios via Excel"
-            >
-              <UsersIcon className="w-4 h-4" />
-              <span className="hidden sm:inline">Sócios</span>
-            </button>
-
             {/* New Contact Button */}
             <button
               onClick={openNewModal}
