@@ -13,6 +13,21 @@ async function requireSuperAdmin(req: NextRequest): Promise<string | NextRespons
   return email
 }
 
+export async function GET(req: NextRequest) {
+  const result = await requireSuperAdmin(req)
+  if (result instanceof NextResponse) return result
+
+  try {
+    const db = getAdminDb()
+    const snap = await db.collection('organizations').orderBy('createdAt', 'desc').get()
+    const orgs = snap.docs.map((d) => ({ id: d.id, ...d.data() }))
+    return NextResponse.json({ orgs })
+  } catch (error: any) {
+    console.error('[super-admin/organizations] GET error:', error)
+    return NextResponse.json({ error: error.message }, { status: 500 })
+  }
+}
+
 export async function POST(req: NextRequest) {
   const result = await requireSuperAdmin(req)
   if (result instanceof NextResponse) return result

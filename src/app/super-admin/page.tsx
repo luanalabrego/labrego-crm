@@ -1,11 +1,10 @@
 'use client'
 
-import { useState, useEffect } from 'react'
-import { collection, onSnapshot, query, orderBy } from 'firebase/firestore'
-import { db } from '@/lib/firebaseClient'
+import { useState, useEffect, useCallback } from 'react'
 import { Building2, Plus, Pencil, X } from 'lucide-react'
 import { PLAN_DISPLAY } from '@/types/plan'
 import type { Organization } from '@/types/organization'
+import { useCrmUser } from '@/contexts/CrmUserContext'
 
 const STATUS_LABELS: Record<string, string> = {
   active: 'Ativo',
@@ -34,6 +33,7 @@ const emptyForm: OrgForm = {
 }
 
 export default function SuperAdminPage() {
+  const { userEmail } = useCrmUser()
   const [orgs, setOrgs] = useState<Organization[]>([])
   const [loading, setLoading] = useState(true)
   const [showModal, setShowModal] = useState(false)
@@ -42,15 +42,25 @@ export default function SuperAdminPage() {
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState('')
 
-  useEffect(() => {
-    const q = query(collection(db, 'organizations'), orderBy('createdAt', 'desc'))
-    const unsub = onSnapshot(q, (snap) => {
-      const items = snap.docs.map((d) => ({ id: d.id, ...d.data() })) as Organization[]
-      setOrgs(items)
+  const fetchOrgs = useCallback(async () => {
+    if (!userEmail) return
+    try {
+      const res = await fetch('/api/super-admin/organizations', {
+        headers: { 'x-user-email': userEmail },
+      })
+      if (!res.ok) throw new Error('Erro ao carregar empresas')
+      const data = await res.json()
+      setOrgs(data.orgs as Organization[])
+    } catch (err) {
+      console.error('[super-admin] fetch orgs error:', err)
+    } finally {
       setLoading(false)
-    })
-    return () => unsub()
-  }, [])
+    }
+  }, [userEmail])
+
+  useEffect(() => {
+    fetchOrgs()
+  }, [fetchOrgs])
 
   const openCreate = () => {
     setEditingOrg(null)
@@ -75,19 +85,20 @@ export default function SuperAdminPage() {
       if (editingOrg) {
         const res = await fetch('/api/super-admin/organizations', {
           method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', 'x-user-email': userEmail || '' },
           body: JSON.stringify({ orgId: editingOrg.id, name: form.name, plan: form.plan, status: form.status }),
         })
         if (!res.ok) throw new Error((await res.json()).error || 'Erro ao atualizar')
       } else {
         const res = await fetch('/api/super-admin/organizations', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', 'x-user-email': userEmail || '' },
           body: JSON.stringify(form),
         })
         if (!res.ok) throw new Error((await res.json()).error || 'Erro ao criar')
       }
       setShowModal(false)
+      fetchOrgs()
     } catch (err: any) {
       setError(err.message)
     } finally {
