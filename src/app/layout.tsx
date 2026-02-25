@@ -4,7 +4,7 @@ import './globals.css'
 import '@/polyfills'
 import { ReactNode, useState, useEffect, useRef } from 'react'
 import { useRouter, usePathname } from 'next/navigation'
-import { onAuthStateChanged } from 'firebase/auth'
+import { onAuthStateChanged, signOut } from 'firebase/auth'
 import { doc, getDoc, collectionGroup, query, where, getDocs } from 'firebase/firestore'
 import { auth, db } from '@/lib/firebaseClient'
 import type { OrgMember } from '@/types/organization'
@@ -42,10 +42,34 @@ export default function RootLayout({ children }: CrmLayoutProps) {
   const [orgPlan, setOrgPlan] = useState<PlanId | null>(null)
   const [member, setMember] = useState<OrgMember | null>(null)
   const [currentTime, setCurrentTime] = useState(new Date())
+  const [userMenuOpen, setUserMenuOpen] = useState(false)
+  const userMenuRef = useRef<HTMLDivElement>(null)
   const router = useRouter()
   const pathname = usePathname()
   const lastLoggedRouteRef = useRef<string | null>(null)
   const isLoginPage = pathname === '/login'
+
+  // Fechar menu do usuario ao clicar fora
+  useEffect(() => {
+    function handleClickOutside(e: MouseEvent) {
+      if (userMenuRef.current && !userMenuRef.current.contains(e.target as Node)) {
+        setUserMenuOpen(false)
+      }
+    }
+    if (userMenuOpen) {
+      document.addEventListener('mousedown', handleClickOutside)
+      return () => document.removeEventListener('mousedown', handleClickOutside)
+    }
+  }, [userMenuOpen])
+
+  const handleLogout = async () => {
+    try {
+      await signOut(auth)
+      router.replace('/login')
+    } catch (err) {
+      console.error('[layout] Logout failed:', err)
+    }
+  }
 
   // Autenticação
   useEffect(() => {
@@ -264,15 +288,54 @@ export default function RootLayout({ children }: CrmLayoutProps) {
                 {/* Right side */}
                 <div className="flex items-center gap-3">
                   <span className="hidden md:inline text-sm text-slate-500">{formatDateTime(currentTime)}</span>
-                  {userPhoto && (
-                    <Image
-                      src={userPhoto}
-                      alt="Perfil"
-                      width={32}
-                      height={32}
-                      className="w-8 h-8 rounded-full ring-2 ring-white shadow-sm"
-                    />
-                  )}
+                  <div className="relative" ref={userMenuRef}>
+                    <button
+                      onClick={() => setUserMenuOpen(!userMenuOpen)}
+                      className="flex items-center gap-2 p-1 rounded-xl hover:bg-slate-100 transition-colors"
+                    >
+                      {userPhoto ? (
+                        <Image
+                          src={userPhoto}
+                          alt="Perfil"
+                          width={32}
+                          height={32}
+                          className="w-8 h-8 rounded-full ring-2 ring-white shadow-sm"
+                        />
+                      ) : (
+                        <div className="w-8 h-8 rounded-full bg-primary-100 flex items-center justify-center ring-2 ring-white shadow-sm">
+                          <span className="text-xs font-semibold text-primary-700">
+                            {userEmail?.charAt(0).toUpperCase() || '?'}
+                          </span>
+                        </div>
+                      )}
+                      <svg className={`w-4 h-4 text-slate-400 hidden md:block transition-transform ${userMenuOpen ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                      </svg>
+                    </button>
+
+                    {/* Dropdown */}
+                    {userMenuOpen && (
+                      <div className="absolute right-0 top-full mt-2 w-64 bg-white rounded-xl shadow-lg border border-slate-200 py-2 z-50 animate-scale-in">
+                        <div className="px-4 py-3 border-b border-slate-100">
+                          <p className="text-sm font-semibold text-slate-800 truncate">{userEmail}</p>
+                          {orgName && (
+                            <p className="text-xs text-slate-500 mt-0.5 truncate">{orgName}</p>
+                          )}
+                        </div>
+                        <div className="py-1">
+                          <button
+                            onClick={handleLogout}
+                            className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-red-600 hover:bg-red-50 transition-colors"
+                          >
+                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+                            </svg>
+                            Sair
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
                 </div>
               </div>
             </header>

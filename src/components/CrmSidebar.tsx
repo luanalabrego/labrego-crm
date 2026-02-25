@@ -26,6 +26,10 @@ import {
   TagIcon,
   CurrencyDollarIcon,
 } from '@heroicons/react/24/outline'
+import { ArrowRightOnRectangleIcon } from '@heroicons/react/24/outline'
+import { signOut } from 'firebase/auth'
+import { auth } from '@/lib/firebaseClient'
+import { useRouter } from 'next/navigation'
 import { useSuperAdmin } from '@/hooks/useSuperAdmin'
 
 interface NavItem {
@@ -136,7 +140,17 @@ interface CrmSidebarProps {
 
 export default function CrmSidebar({ collapsed, onToggleCollapse, onNavigate }: CrmSidebarProps) {
   const pathname = usePathname()
+  const router = useRouter()
   const { isSuperAdmin } = useSuperAdmin()
+
+  const handleLogout = async () => {
+    try {
+      await signOut(auth)
+      router.replace('/login')
+    } catch (err) {
+      console.error('[sidebar] Logout failed:', err)
+    }
+  }
   const isAgentesSubItemActive = agentesItems.some(
     (item) => pathname === item.href || pathname.startsWith(`${item.href}/`)
   )
@@ -383,6 +397,28 @@ export default function CrmSidebar({ collapsed, onToggleCollapse, onNavigate }: 
             </ul>
           </>
         )}
+      </div>
+
+      {/* Logout */}
+      <div className="px-3 py-3 border-t border-white/10">
+        <button
+          onClick={handleLogout}
+          className={`
+            w-full flex items-center gap-3 px-3 py-2.5 rounded-xl transition-all duration-200 group relative
+            text-white/60 hover:bg-red-500/10 hover:text-red-400
+            ${collapsed ? 'justify-center' : ''}
+          `}
+        >
+          <ArrowRightOnRectangleIcon className="w-5 h-5" />
+          {!collapsed && (
+            <span className="font-medium text-sm">Sair</span>
+          )}
+          {collapsed && (
+            <span className="absolute left-full ml-3 px-3 py-1.5 bg-neutral-900 text-white text-xs font-medium rounded-lg opacity-0 pointer-events-none group-hover:opacity-100 transition-opacity whitespace-nowrap z-50 shadow-lg">
+              Sair
+            </span>
+          )}
+        </button>
       </div>
     </nav>
   )
