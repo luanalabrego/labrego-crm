@@ -99,7 +99,9 @@ export default function SuperAdminPage() {
         })
         if (!res.ok) throw new Error((await res.json()).error || 'Erro ao criar')
         const data = await res.json()
-        if (data.emailSent) {
+        if (!data.adminCreated) {
+          toast.success('Empresa criada! O admin já tinha conta e foi vinculado.')
+        } else if (data.emailSent) {
           toast.success('Empresa criada! E-mail de boas-vindas enviado para o admin.')
         } else {
           toast.warning('Empresa criada, mas o e-mail falhou. Senha temporária: ' + data.tempPassword)

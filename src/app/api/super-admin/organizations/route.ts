@@ -67,7 +67,7 @@ function buildWelcomeEmailHtml(orgName: string, email: string, tempPassword: str
           </table>
           <table cellpadding="0" cellspacing="0" style="margin:24px auto;">
             <tr><td style="background:#09B00F;border-radius:8px;">
-              <a href="${loginUrl}" style="display:inline-block;padding:14px 32px;color:#fff;text-decoration:none;font-weight:bold;font-size:15px;">Acessar o sistema</a>
+              <a href="${escapeHtml(loginUrl)}" style="display:inline-block;padding:14px 32px;color:#fff;text-decoration:none;font-weight:bold;font-size:15px;">Acessar o sistema</a>
             </td></tr>
           </table>
           <p style="color:#888;font-size:13px;line-height:1.5;margin:24px 0 0;border-top:1px solid #eee;padding-top:16px;">
@@ -145,7 +145,7 @@ export async function POST(req: NextRequest) {
     await orgRef.collection('members').doc().set({
       userId,
       email: normalizedEmail,
-      displayName: adminEmail.split('@')[0],
+      displayName: name,
       role: 'admin',
       permissions: {
         pages: ['/contatos', '/funil', '/funil/produtividade', '/conversao', '/cadencia', '/ligacoes', '/admin/usuarios', '/admin/creditos', '/admin/plano'],
@@ -168,23 +168,25 @@ export async function POST(req: NextRequest) {
       invitedBy: result,
     })
 
-    // 6. Send welcome email (non-blocking — failure does not rollback org/user)
+    // 6. Send welcome email only for newly created users (non-blocking)
     let emailSent = false
-    try {
-      const loginUrl = `${req.headers.get('origin') || process.env.NEXT_PUBLIC_APP_URL || 'https://app.voxium.com.br'}/login`
-      const html = buildWelcomeEmailHtml(name, normalizedEmail, tempPassword, loginUrl)
-      const emailResult = await sendWithFallback(orgRef.id, normalizedEmail, 'Bem-vindo ao Voxium CRM', html)
-      emailSent = emailResult.success
-      if (!emailResult.success) {
-        console.error('[super-admin/organizations] Welcome email failed:', emailResult.error)
+    if (adminCreated) {
+      try {
+        const loginUrl = `${req.headers.get('origin') || process.env.NEXT_PUBLIC_APP_URL || 'https://app.voxium.com.br'}/login`
+        const html = buildWelcomeEmailHtml(name, normalizedEmail, tempPassword, loginUrl)
+        const emailResult = await sendWithFallback(orgRef.id, normalizedEmail, 'Bem-vindo ao Voxium CRM', html)
+        emailSent = emailResult.success
+        if (!emailResult.success) {
+          console.error('[super-admin/organizations] Welcome email failed:', emailResult.error)
+        }
+      } catch (emailError) {
+        console.error('[super-admin/organizations] Welcome email error:', emailError)
       }
-    } catch (emailError) {
-      console.error('[super-admin/organizations] Welcome email error:', emailError)
     }
 
-    // 7. Return response — only include tempPassword if email failed
+    // 7. Return response
     const response: Record<string, unknown> = { orgId: orgRef.id, adminCreated, emailSent }
-    if (!emailSent) {
+    if (adminCreated && !emailSent) {
       response.tempPassword = tempPassword
     }
 
