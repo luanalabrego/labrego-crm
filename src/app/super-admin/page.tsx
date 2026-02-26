@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { Building2, Plus, Pencil, X } from 'lucide-react'
+import { toast } from 'sonner'
 import { PLAN_DISPLAY } from '@/types/plan'
 import type { Organization } from '@/types/organization'
 import { useCrmUser } from '@/contexts/CrmUserContext'
@@ -89,6 +90,7 @@ export default function SuperAdminPage() {
           body: JSON.stringify({ orgId: editingOrg.id, name: form.name, plan: form.plan, status: form.status }),
         })
         if (!res.ok) throw new Error((await res.json()).error || 'Erro ao atualizar')
+        toast.success('Empresa atualizada com sucesso.')
       } else {
         const res = await fetch('/api/super-admin/organizations', {
           method: 'POST',
@@ -96,6 +98,14 @@ export default function SuperAdminPage() {
           body: JSON.stringify(form),
         })
         if (!res.ok) throw new Error((await res.json()).error || 'Erro ao criar')
+        const data = await res.json()
+        if (!data.adminCreated) {
+          toast.success('Empresa criada! O admin já tinha conta e foi vinculado.')
+        } else if (data.emailSent) {
+          toast.success('Empresa criada! E-mail de boas-vindas enviado para o admin.')
+        } else {
+          toast.warning('Empresa criada, mas o e-mail falhou. Senha temporária: ' + data.tempPassword)
+        }
       }
       setShowModal(false)
       fetchOrgs()
