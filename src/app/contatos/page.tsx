@@ -426,42 +426,69 @@ export default function ContatosPage() {
     if (!file) return
 
     setImportFile(file)
+    const isExcel = file.name.endsWith('.xlsx') || file.name.endsWith('.xls')
     const reader = new FileReader()
+
     reader.onload = (event) => {
       try {
-        const text = event.target?.result as string
-        const lines = text.split('\n').filter((line) => line.trim())
-        const headers = lines[0].split(',').map((h) => h.replace(/"/g, '').trim().toLowerCase())
+        const data = event.target?.result
+        if (!data) return
 
-        const preview = lines.slice(1, 6).map((line) => {
-          const values = line.match(/("([^"]*)"|[^,]+)/g) || []
-          const row: Record<string, string> = {}
-          headers.forEach((header, idx) => {
-            row[header] = values[idx]?.replace(/"/g, '').trim() || ''
+        let preview: Record<string, string>[] = []
+
+        if (isExcel) {
+          const workbook = XLSX.read(data, { type: 'array' })
+          const firstSheetName = workbook.SheetNames[0]
+          const worksheet = workbook.Sheets[firstSheetName]
+          const rows: Record<string, unknown>[] = XLSX.utils.sheet_to_json(worksheet, { defval: '' })
+
+          preview = rows.slice(0, 5).map((row) => {
+            const normalized: Record<string, string> = {}
+            Object.entries(row).forEach(([key, value]) => {
+              normalized[key.toLowerCase()] = String(value)
+            })
+            return normalized
           })
-          return row
-        })
+        } else {
+          const text = data as string
+          const lines = text.split('\n').filter((line) => line.trim())
+          const headers = lines[0].split(',').map((h) => h.replace(/"/g, '').trim().toLowerCase())
+
+          preview = lines.slice(1, 6).map((line) => {
+            const values = line.match(/("([^"]*)"|[^,]+)/g) || []
+            const row: Record<string, string> = {}
+            headers.forEach((header, idx) => {
+              row[header] = values[idx]?.replace(/"/g, '').trim() || ''
+            })
+            return row
+          })
+        }
 
         setImportPreview(preview)
       } catch {
-        alert('Erro ao ler arquivo CSV')
+        alert('Erro ao ler arquivo')
       }
     }
-    reader.readAsText(file, 'UTF-8')
+
+    if (isExcel) {
+      reader.readAsArrayBuffer(file)
+    } else {
+      reader.readAsText(file, 'UTF-8')
+    }
   }
 
-  // Import contacts from CSV
+  // Import contacts from CSV/Excel
   const handleImport = async () => {
     if (!importFile) return
 
     setImporting(true)
     try {
+      const isExcel = importFile.name.endsWith('.xlsx') || importFile.name.endsWith('.xls')
       const reader = new FileReader()
       reader.onload = async (event) => {
         try {
-          const text = event.target?.result as string
-          const lines = text.split('\n').filter((line) => line.trim())
-          const headers = lines[0].split(',').map((h) => h.replace(/"/g, '').trim().toLowerCase())
+          const data = event.target?.result
+          if (!data) return
 
           const fieldMap: Record<string, string> = {
             nome: 'name',
@@ -482,15 +509,44 @@ export default function ContatosPage() {
             source: 'leadSource',
           }
 
+          let rows: Record<string, string>[] = []
+
+          if (isExcel) {
+            const workbook = XLSX.read(data, { type: 'array' })
+            const firstSheetName = workbook.SheetNames[0]
+            const worksheet = workbook.Sheets[firstSheetName]
+            const jsonRows: Record<string, unknown>[] = XLSX.utils.sheet_to_json(worksheet, { defval: '' })
+
+            rows = jsonRows.map((row) => {
+              const normalized: Record<string, string> = {}
+              Object.entries(row).forEach(([key, value]) => {
+                normalized[key.toLowerCase()] = String(value)
+              })
+              return normalized
+            })
+          } else {
+            const text = data as string
+            const lines = text.split('\n').filter((line) => line.trim())
+            const headers = lines[0].split(',').map((h) => h.replace(/"/g, '').trim().toLowerCase())
+
+            for (let i = 1; i < lines.length; i++) {
+              const values = lines[i].match(/("([^"]*)"|[^,]+)/g) || []
+              const row: Record<string, string> = {}
+              headers.forEach((header, idx) => {
+                row[header] = values[idx]?.replace(/"/g, '').trim() || ''
+              })
+              rows.push(row)
+            }
+          }
+
           let imported = 0
-          for (let i = 1; i < lines.length; i++) {
-            const values = lines[i].match(/("([^"]*)"|[^,]+)/g) || []
+          for (const row of rows) {
             const contact: Record<string, string> = {}
 
-            headers.forEach((header, idx) => {
+            Object.entries(row).forEach(([header, value]) => {
               const field = fieldMap[header]
               if (field) {
-                contact[field] = values[idx]?.replace(/"/g, '').trim() || ''
+                contact[field] = value
               }
             })
 
@@ -517,7 +573,12 @@ export default function ContatosPage() {
           setImporting(false)
         }
       }
-      reader.readAsText(importFile, 'UTF-8')
+
+      if (isExcel) {
+        reader.readAsArrayBuffer(importFile)
+      } else {
+        reader.readAsText(importFile, 'UTF-8')
+      }
     } catch {
       setImporting(false)
     }
@@ -2186,7 +2247,7 @@ export default function ContatosPage() {
                 </div>
                 <div>
                   <h3 className="text-base font-bold text-slate-800">Importar Contatos</h3>
-                  <p className="text-xs text-slate-500">Carregue um arquivo CSV com seus contatos</p>
+                  <p className="text-xs text-slate-500">Carregue um arquivo CSV ou Excel com seus contatos</p>
                 </div>
               </div>
               <button
@@ -2212,7 +2273,7 @@ export default function ContatosPage() {
                 }`}>
                   <input
                     type="file"
-                    accept=".csv"
+                    accept=".csv,.xlsx,.xls"
                     onChange={handleImportFileChange}
                     className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
                   />
@@ -2229,7 +2290,7 @@ export default function ContatosPage() {
                       <div className="w-12 h-12 rounded-full bg-slate-100 flex items-center justify-center mx-auto">
                         <ArrowUpTrayIcon className="w-6 h-6 text-slate-400" />
                       </div>
-                      <p className="text-sm font-medium text-slate-700">Clique ou arraste um arquivo CSV</p>
+                      <p className="text-sm font-medium text-slate-700">Clique ou arraste um arquivo CSV/Excel</p>
                       <p className="text-xs text-slate-500">Colunas: Nome, Telefone, Email, Empresa, Ramo, Origem</p>
                     </div>
                   )}
