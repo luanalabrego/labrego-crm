@@ -24,7 +24,7 @@ export async function POST(request: NextRequest) {
 
   const db = getAdminDb()
   const now = new Date()
-  const results = { enrolled: 0, processed: 0, success: 0, failed: 0, skipped: 0 }
+  const results = { enrolled: 0, processed: 0, success: 0, failed: 0, skipped: 0, errors: [] as string[] }
 
   try {
     // Get all organizations
@@ -60,6 +60,7 @@ export async function POST(request: NextRequest) {
       } catch (orgError) {
         console.error(`Cadence error for org ${orgId}:`, orgError)
         results.failed++
+        results.errors.push(`${orgId}: ${orgError instanceof Error ? orgError.message : String(orgError)}`)
       }
     }
 
