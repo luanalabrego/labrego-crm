@@ -132,7 +132,7 @@ export async function logCadenceExecution(
     ? `Cadência automática: ${data.stepName} via ${data.channel}`
     : `Cadência falhou: ${data.stepName} via ${data.channel} — ${data.error}`
 
-  await db.collection('organizations').doc(orgId).collection('clients').doc(clientId).collection('logs').add({
+  await db.collection('clients').doc(clientId).collection('logs').add({
     action,
     message,
     type: 'cadence',

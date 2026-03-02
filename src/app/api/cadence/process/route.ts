@@ -243,7 +243,7 @@ async function processOrg(
         stageId: stage.id,
         stageName: stage.name,
         success: result.success,
-        error: result.error,
+        error: result.error || '',
         templatePreview: (step.messageTemplate || step.emailSubject || step.name).slice(0, 100),
       })
 
@@ -258,7 +258,7 @@ async function processOrg(
         stageName: stage.name,
         channel: step.contactMethod,
         status: result.success ? 'success' : 'failed',
-        error: result.error,
+        error: result.error || '',
         executedAt: now.toISOString(),
         retryCount: 0,
       }
