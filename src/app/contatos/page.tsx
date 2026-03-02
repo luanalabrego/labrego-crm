@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useMemo, useCallback } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
-import { collection, onSnapshot, doc, setDoc, deleteDoc, updateDoc, addDoc, query, orderBy, getDocs, where } from 'firebase/firestore'
+import { collection, onSnapshot, doc, setDoc, deleteDoc, updateDoc, addDoc, query, orderBy, getDocs, where, writeBatch } from 'firebase/firestore'
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage'
 import { db, storage } from '@/lib/firebaseClient'
 import { useCrmUser } from '@/contexts/CrmUserContext'
@@ -36,13 +36,16 @@ import {
 } from '@heroicons/react/24/outline'
 import { formatWhatsAppNumber } from '@/lib/format'
 import MemberSelector from '@/components/MemberSelector'
+import { useVisibleFunnels } from '@/hooks/useVisibleFunnels'
 
 // Types
 type Cliente = {
   id: string
   name: string
   phone: string
+  phone2?: string
   company?: string
+  address?: string
   description?: string
   industry?: string
   document?: string
@@ -71,6 +74,7 @@ type FunnelStage = {
   name: string
   order: number
   color?: string
+  funnelId?: string
 }
 
 type SortConfig = {
@@ -201,8 +205,14 @@ export default function ContatosPage() {
 
   // Multi-select state
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+  const [allFilteredSelected, setAllFilteredSelected] = useState(false)
   const [showBulkDeleteModal, setShowBulkDeleteModal] = useState(false)
   const [deletingBulk, setDeletingBulk] = useState(false)
+  const [showBulkMoveModal, setShowBulkMoveModal] = useState(false)
+  const [bulkFunnelId, setBulkFunnelId] = useState('')
+  const [bulkStageId, setBulkStageId] = useState('')
+  const [savingBulkMove, setSavingBulkMove] = useState(false)
+  const [quickFunnelFilter, setQuickFunnelFilter] = useState<'all' | 'no-funnel'>('all')
 
   // Actions dropdown
   const [openActionsId, setOpenActionsId] = useState<string | null>(null)
@@ -229,6 +239,16 @@ export default function ContatosPage() {
   const [importFile, setImportFile] = useState<File | null>(null)
   const [importPreview, setImportPreview] = useState<Array<Record<string, string>>>([])
   const [exporting, setExporting] = useState(false)
+  const [importFunnelId, setImportFunnelId] = useState('')
+  const [importStageId, setImportStageId] = useState('')
+  const [importResult, setImportResult] = useState<{ success: boolean; count: number } | null>(null)
+  const [importProgress, setImportProgress] = useState<{ current: number; total: number } | null>(null)
+  const { funnels } = useVisibleFunnels()
+
+  const importStagesForFunnel = useMemo(() => {
+    if (!importFunnelId) return []
+    return funnelStages.filter(s => s.funnelId === importFunnelId)
+  }, [importFunnelId, funnelStages])
 
   // Partners upload state
   const [showPartnersModal, setShowPartnersModal] = useState(false)
@@ -358,6 +378,7 @@ export default function ContatosPage() {
           fromStageName,
           toStageName,
         },
+        orgId,
         createdAt: new Date().toISOString(),
       })
 
@@ -420,104 +441,238 @@ export default function ContatosPage() {
     window.open(`mailto:${email}?subject=${subject}`, '_blank')
   }
 
-  // Handle import file selection
+  // Handle import file selection (CSV + XLSX/XLS)
   const handleImportFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (!file) return
 
     setImportFile(file)
-    const reader = new FileReader()
-    reader.onload = (event) => {
-      try {
-        const text = event.target?.result as string
-        const lines = text.split('\n').filter((line) => line.trim())
-        const headers = lines[0].split(',').map((h) => h.replace(/"/g, '').trim().toLowerCase())
+    const isExcel = file.name.endsWith('.xlsx') || file.name.endsWith('.xls')
 
-        const preview = lines.slice(1, 6).map((line) => {
-          const values = line.match(/("([^"]*)"|[^,]+)/g) || []
-          const row: Record<string, string> = {}
-          headers.forEach((header, idx) => {
-            row[header] = values[idx]?.replace(/"/g, '').trim() || ''
+    if (isExcel) {
+      const reader = new FileReader()
+      reader.onload = (event) => {
+        try {
+          const data = event.target?.result
+          const workbook = XLSX.read(data, { type: 'array' })
+          const worksheet = workbook.Sheets[workbook.SheetNames[0]]
+          const rows = XLSX.utils.sheet_to_json<Record<string, unknown>>(worksheet, { defval: '' })
+
+          const preview = rows.slice(0, 5).map((row) => {
+            const mapped: Record<string, string> = {}
+            Object.entries(row).forEach(([key, value]) => {
+              mapped[key.toLowerCase().trim()] = String(value ?? '').trim()
+            })
+            return mapped
           })
-          return row
-        })
 
-        setImportPreview(preview)
-      } catch {
-        alert('Erro ao ler arquivo CSV')
+          setImportPreview(preview)
+        } catch {
+          alert('Erro ao ler arquivo Excel')
+        }
       }
+      reader.readAsArrayBuffer(file)
+    } else {
+      const reader = new FileReader()
+      reader.onload = (event) => {
+        try {
+          const text = event.target?.result as string
+          const lines = text.split('\n').filter((line) => line.trim())
+          const headers = lines[0].split(',').map((h) => h.replace(/"/g, '').trim().toLowerCase())
+
+          const preview = lines.slice(1, 6).map((line) => {
+            const values = line.match(/("([^"]*)"|[^,]+)/g) || []
+            const row: Record<string, string> = {}
+            headers.forEach((header, idx) => {
+              row[header] = values[idx]?.replace(/"/g, '').trim() || ''
+            })
+            return row
+          })
+
+          setImportPreview(preview)
+        } catch {
+          alert('Erro ao ler arquivo CSV')
+        }
+      }
+      reader.readAsText(file, 'UTF-8')
     }
-    reader.readAsText(file, 'UTF-8')
   }
 
-  // Import contacts from CSV
+  // Import contacts from CSV or XLSX
   const handleImport = async () => {
     if (!importFile) return
+
+    const fieldMap: Record<string, string> = {
+      // Nome
+      nome: 'name',
+      name: 'name',
+      'razao social': 'name',
+      'razão social': 'name',
+      // Nome Fantasia → empresa
+      'nome fantasia': 'company',
+      empresa: 'company',
+      company: 'company',
+      // Telefone
+      telefone: 'phone',
+      phone: 'phone',
+      'telefone1 completo': 'phone',
+      telefone1: 'phone',
+      'telefone2 completo': 'phone2',
+      telefone2: 'phone2',
+      // Email
+      email: 'email',
+      'e-mail': 'email',
+      // Ramo/Industria
+      ramo: 'industry',
+      industry: 'industry',
+      'ramo de atividade': 'industry',
+      // Documento
+      cnpj: 'document',
+      cpf: 'document',
+      'cnpj/cpf': 'document',
+      document: 'document',
+      // Origem
+      origem: 'leadSource',
+      leadsource: 'leadSource',
+      source: 'leadSource',
+      // Socios
+      'socio(s)': 'partners',
+      'sócio(s)': 'partners',
+      socios: 'partners',
+      'sócios': 'partners',
+      partners: 'partners',
+      // Responsavel
+      'usuario responsavel': 'assignedToName',
+      'usuário responsável': 'assignedToName',
+    }
+
+    // Colunas de endereco que serao combinadas em um unico campo 'address'
+    const addressColumns = [
+      'tipo logradouro', 'logradouro', 'numero', 'número',
+      'complemento', 'bairro', 'cep', 'uf', 'municipio', 'município',
+    ]
+
+    const isExcel = importFile.name.endsWith('.xlsx') || importFile.name.endsWith('.xls')
 
     setImporting(true)
     try {
       const reader = new FileReader()
       reader.onload = async (event) => {
         try {
-          const text = event.target?.result as string
-          const lines = text.split('\n').filter((line) => line.trim())
-          const headers = lines[0].split(',').map((h) => h.replace(/"/g, '').trim().toLowerCase())
+          let rows: Record<string, string>[] = []
 
-          const fieldMap: Record<string, string> = {
-            nome: 'name',
-            name: 'name',
-            telefone: 'phone',
-            phone: 'phone',
-            email: 'email',
-            empresa: 'company',
-            company: 'company',
-            ramo: 'industry',
-            industry: 'industry',
-            cnpj: 'document',
-            cpf: 'document',
-            'cnpj/cpf': 'document',
-            document: 'document',
-            origem: 'leadSource',
-            leadsource: 'leadSource',
-            source: 'leadSource',
+          // Monta endereco a partir de colunas individuais
+          const buildAddress = (addrParts: Record<string, string>): string => {
+            return [
+              [addrParts['tipo logradouro'], addrParts['logradouro']].filter(Boolean).join(' '),
+              addrParts['numero'] || addrParts['número'] ? `${addrParts['numero'] || addrParts['número']}` : '',
+              addrParts['complemento'],
+              addrParts['bairro'],
+              [addrParts['municipio'] || addrParts['município'], addrParts['uf']].filter(Boolean).join('/'),
+              addrParts['cep'] ? `CEP ${addrParts['cep']}` : '',
+            ].filter(Boolean).join(', ')
           }
 
-          let imported = 0
-          for (let i = 1; i < lines.length; i++) {
-            const values = lines[i].match(/("([^"]*)"|[^,]+)/g) || []
-            const contact: Record<string, string> = {}
+          // Mapeia uma row (XLSX ou CSV) para campos do contato
+          const mapRow = (entries: [string, unknown][]): Record<string, string> => {
+            const mapped: Record<string, string> = {}
+            const addrParts: Record<string, string> = {}
 
-            headers.forEach((header, idx) => {
-              const field = fieldMap[header]
+            entries.forEach(([key, value]) => {
+              const normalizedKey = key.toLowerCase().trim()
+              const val = String(value ?? '').trim()
+              if (!val) return
+
+              const field = fieldMap[normalizedKey]
               if (field) {
-                contact[field] = values[idx]?.replace(/"/g, '').trim() || ''
+                // Se o campo ja tem valor (ex: 'name' via 'razao social'), nao sobrescreve com vazio
+                if (!mapped[field]) {
+                  mapped[field] = val
+                }
+              }
+
+              if (addressColumns.includes(normalizedKey)) {
+                addrParts[normalizedKey] = val
               }
             })
 
-            if (contact.name && contact.phone) {
-              const contactRef = doc(collection(db, 'clients'))
-              await setDoc(contactRef, {
-                ...contact,
-                orgId,
-                createdAt: new Date().toISOString(),
-                updatedAt: new Date().toISOString(),
-              })
-              imported++
+            const address = buildAddress(addrParts)
+            if (address) {
+              mapped.address = address
+            }
+
+            return mapped
+          }
+
+          if (isExcel) {
+            const data = event.target?.result
+            const workbook = XLSX.read(data, { type: 'array' })
+            const worksheet = workbook.Sheets[workbook.SheetNames[0]]
+            const rawRows = XLSX.utils.sheet_to_json<Record<string, unknown>>(worksheet, { defval: '' })
+            rows = rawRows.map((row) => mapRow(Object.entries(row)))
+          } else {
+            const text = event.target?.result as string
+            const lines = text.split('\n').filter((line) => line.trim())
+            const headers = lines[0].split(',').map((h) => h.replace(/"/g, '').trim())
+
+            for (let i = 1; i < lines.length; i++) {
+              const values = lines[i].match(/("([^"]*)"|[^,]+)/g) || []
+              const entries: [string, unknown][] = headers.map((header, idx) => [
+                header,
+                values[idx]?.replace(/"/g, '').trim() || '',
+              ])
+              rows.push(mapRow(entries))
             }
           }
 
-          alert(`${imported} contato(s) importado(s) com sucesso!`)
+          const validRows = rows.filter(c => c.name && c.phone)
+          const total = validRows.length
+          setImportProgress({ current: 0, total })
+
+          let imported = 0
+          for (const contact of validRows) {
+            const contactRef = doc(collection(db, 'clients'))
+            await setDoc(contactRef, {
+              ...contact,
+              orgId,
+              ...(importStageId && importFunnelId && {
+                funnelId: importFunnelId,
+                funnelStage: importStageId,
+                funnelStageUpdatedAt: new Date().toISOString(),
+              }),
+              createdAt: new Date().toISOString(),
+              updatedAt: new Date().toISOString(),
+            })
+            imported++
+            setImportProgress({ current: imported, total })
+          }
+
           setShowImportModal(false)
           setImportFile(null)
           setImportPreview([])
+          setImportFunnelId('')
+          setImportStageId('')
+          setImportProgress(null)
+          setImportResult({ success: true, count: imported })
         } catch (error) {
           console.error('Erro ao importar:', error)
-          alert('Erro ao importar contatos')
+          setShowImportModal(false)
+          setImportFile(null)
+          setImportPreview([])
+          setImportFunnelId('')
+          setImportStageId('')
+          setImportProgress(null)
+          setImportResult({ success: false, count: 0 })
         } finally {
           setImporting(false)
         }
       }
-      reader.readAsText(importFile, 'UTF-8')
+
+      if (isExcel) {
+        reader.readAsArrayBuffer(importFile)
+      } else {
+        reader.readAsText(importFile, 'UTF-8')
+      }
     } catch {
       setImporting(false)
     }
@@ -526,6 +681,11 @@ export default function ContatosPage() {
   // Filter and sort clients
   const filteredClients = useMemo(() => {
     let result = [...clients]
+
+    // Quick funnel filter
+    if (quickFunnelFilter === 'no-funnel') {
+      result = result.filter(c => !c.funnelStage)
+    }
 
     // Apply column filters
     Object.entries(columnFilters).forEach(([key, value]) => {
@@ -568,7 +728,7 @@ export default function ContatosPage() {
     }
 
     return result
-  }, [clients, columnFilters, sortConfig, getStageName])
+  }, [clients, columnFilters, sortConfig, getStageName, quickFunnelFilter])
 
   // Export contacts to CSV
   const handleExport = useCallback(() => {
@@ -824,6 +984,7 @@ export default function ContatosPage() {
   const clearFilters = () => {
     setColumnFilters({})
     setActiveFilterColumn(null)
+    setQuickFunnelFilter('all')
   }
 
   // Open new contact modal
@@ -943,9 +1104,15 @@ export default function ContatosPage() {
   const handleSelectAll = () => {
     if (selectedIds.size === paginatedClients.length) {
       setSelectedIds(new Set())
+      setAllFilteredSelected(false)
     } else {
       setSelectedIds(new Set(paginatedClients.map((c) => c.id)))
     }
+  }
+
+  const handleSelectAllFiltered = () => {
+    setSelectedIds(new Set(filteredClients.map((c) => c.id)))
+    setAllFilteredSelected(true)
   }
 
   const handleSelectOne = (id: string) => {
@@ -956,6 +1123,7 @@ export default function ContatosPage() {
       newSelected.add(id)
     }
     setSelectedIds(newSelected)
+    setAllFilteredSelected(false)
   }
 
   const handleBulkDelete = async () => {
@@ -967,6 +1135,7 @@ export default function ContatosPage() {
       )
       await Promise.all(deletePromises)
       setSelectedIds(new Set())
+      setAllFilteredSelected(false)
       setShowBulkDeleteModal(false)
     } catch (error) {
       console.error('Erro ao excluir contatos:', error)
@@ -975,6 +1144,44 @@ export default function ContatosPage() {
       setDeletingBulk(false)
     }
   }
+
+  const handleBulkMove = async () => {
+    if (selectedIds.size === 0 || !bulkFunnelId || !bulkStageId) return
+    setSavingBulkMove(true)
+    try {
+      const ids = Array.from(selectedIds)
+      const chunkSize = 250
+      for (let i = 0; i < ids.length; i += chunkSize) {
+        const chunk = ids.slice(i, i + chunkSize)
+        const batch = writeBatch(db)
+        for (const id of chunk) {
+          const clientRef = doc(db, 'clients', id)
+          batch.update(clientRef, {
+            funnelId: bulkFunnelId,
+            funnelStage: bulkStageId,
+            funnelStageUpdatedAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          })
+        }
+        await batch.commit()
+      }
+      setSelectedIds(new Set())
+      setAllFilteredSelected(false)
+      setShowBulkMoveModal(false)
+      setBulkFunnelId('')
+      setBulkStageId('')
+    } catch (error) {
+      console.error('Erro ao mover contatos:', error)
+      alert('Erro ao mover alguns contatos')
+    } finally {
+      setSavingBulkMove(false)
+    }
+  }
+
+  const bulkStagesForFunnel = useMemo(() => {
+    if (!bulkFunnelId) return []
+    return funnelStages.filter(s => s.funnelId === bulkFunnelId)
+  }, [bulkFunnelId, funnelStages])
 
   // Column definitions
   const columns = [
@@ -988,7 +1195,7 @@ export default function ContatosPage() {
     { key: 'daysSinceFollowUp', label: 'Último Follow-up', sortable: true, filterable: false },
   ]
 
-  const hasActiveFilters = Object.values(columnFilters).some((v) => v)
+  const hasActiveFilters = Object.values(columnFilters).some((v) => v) || quickFunnelFilter !== 'all'
 
   return (
     <div className="p-6">
@@ -1004,6 +1211,19 @@ export default function ContatosPage() {
           </div>
 
           <div className="flex items-center gap-2">
+            {/* Sem Funil filter chip */}
+            <button
+              onClick={() => setQuickFunnelFilter(prev => prev === 'no-funnel' ? 'all' : 'no-funnel')}
+              className={`flex items-center gap-1.5 px-3 py-2 text-sm font-medium rounded-xl transition-all border ${
+                quickFunnelFilter === 'no-funnel'
+                  ? 'bg-amber-50 text-amber-700 border-amber-200 hover:bg-amber-100'
+                  : 'text-slate-600 bg-white border-slate-200 hover:bg-slate-50 hover:border-slate-300'
+              }`}
+            >
+              <FunnelIcon className="w-4 h-4" />
+              Sem Funil
+            </button>
+
             {hasActiveFilters && (
               <button
                 onClick={clearFilters}
@@ -1087,33 +1307,63 @@ export default function ContatosPage() {
 
       {/* Selection Action Bar */}
       {selectedIds.size > 0 && (
-        <div className="mb-4 p-4 bg-primary-50 rounded-2xl border border-primary-200 flex items-center justify-between animate-in fade-in slide-in-from-top-2 duration-200">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-full bg-primary-100 flex items-center justify-center">
-              <CheckIcon className="w-5 h-5 text-primary-600" />
+        <div className="mb-4 p-4 bg-primary-50 rounded-2xl border border-primary-200 animate-in fade-in slide-in-from-top-2 duration-200">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-full bg-primary-100 flex items-center justify-center">
+                <CheckIcon className="w-5 h-5 text-primary-600" />
+              </div>
+              <div>
+                <p className="text-sm font-semibold text-primary-800">
+                  {selectedIds.size} {selectedIds.size === 1 ? 'contato selecionado' : 'contatos selecionados'}
+                </p>
+                <p className="text-xs text-primary-600">Selecione uma ação para aplicar aos contatos</p>
+              </div>
             </div>
-            <div>
-              <p className="text-sm font-semibold text-primary-800">
-                {selectedIds.size} {selectedIds.size === 1 ? 'contato selecionado' : 'contatos selecionados'}
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => { setSelectedIds(new Set()); setAllFilteredSelected(false) }}
+                className="px-4 py-2 text-sm font-medium text-slate-600 hover:bg-white/60 rounded-xl transition-colors"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={() => setShowBulkMoveModal(true)}
+                className="px-4 py-2 bg-primary-600 text-white rounded-xl font-medium text-sm hover:bg-primary-700 transition-colors flex items-center gap-2"
+              >
+                <FunnelIcon className="w-4 h-4" />
+                Mover para Funil
+              </button>
+              <button
+                onClick={() => setShowBulkDeleteModal(true)}
+                className="px-4 py-2 bg-red-600 text-white rounded-xl font-medium text-sm hover:bg-red-700 transition-colors flex items-center gap-2"
+              >
+                <TrashIcon className="w-4 h-4" />
+                Excluir selecionados
+              </button>
+            </div>
+          </div>
+          {/* Banner: selecionar todos os filtrados */}
+          {!allFilteredSelected && selectedIds.size === paginatedClients.length && filteredClients.length > paginatedClients.length && (
+            <div className="mt-3 pt-3 border-t border-primary-200 text-center">
+              <p className="text-sm text-primary-700">
+                Todos os <strong>{paginatedClients.length}</strong> contatos desta página estão selecionados.{' '}
+                <button
+                  onClick={handleSelectAllFiltered}
+                  className="text-primary-700 font-semibold underline hover:text-primary-900 transition-colors"
+                >
+                  Selecionar todos os {filteredClients.length} contatos filtrados
+                </button>
               </p>
-              <p className="text-xs text-primary-600">Selecione uma ação para aplicar aos contatos</p>
             </div>
-          </div>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => setSelectedIds(new Set())}
-              className="px-4 py-2 text-sm font-medium text-slate-600 hover:bg-white/60 rounded-xl transition-colors"
-            >
-              Cancelar
-            </button>
-            <button
-              onClick={() => setShowBulkDeleteModal(true)}
-              className="px-4 py-2 bg-red-600 text-white rounded-xl font-medium text-sm hover:bg-red-700 transition-colors flex items-center gap-2"
-            >
-              <TrashIcon className="w-4 h-4" />
-              Excluir selecionados
-            </button>
-          </div>
+          )}
+          {allFilteredSelected && (
+            <div className="mt-3 pt-3 border-t border-primary-200 text-center">
+              <p className="text-sm text-primary-700 font-medium">
+                Todos os <strong>{filteredClients.length}</strong> contatos filtrados estão selecionados.
+              </p>
+            </div>
+          )}
         </div>
       )}
 
@@ -1923,6 +2173,86 @@ export default function ContatosPage() {
         </div>
       )}
 
+      {/* Modal Mover para Funil (bulk) */}
+      {showBulkMoveModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center">
+          <div
+            className="absolute inset-0 bg-black/40 backdrop-blur-sm"
+            onClick={() => !savingBulkMove && setShowBulkMoveModal(false)}
+          />
+          <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-md m-4 p-6">
+            <div className="flex items-center gap-4 mb-4">
+              <div className="w-12 h-12 rounded-full bg-primary-100 flex items-center justify-center">
+                <FunnelIcon className="w-6 h-6 text-primary-600" />
+              </div>
+              <div>
+                <h3 className="text-lg font-bold text-slate-800">Mover {selectedIds.size} contatos</h3>
+                <p className="text-sm text-slate-500">Selecione o funil e a etapa de destino</p>
+              </div>
+            </div>
+
+            <div className="space-y-4 mb-6">
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">Funil</label>
+                <select
+                  value={bulkFunnelId}
+                  onChange={(e) => { setBulkFunnelId(e.target.value); setBulkStageId('') }}
+                  className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm bg-white focus:ring-2 focus:ring-primary-200 focus:border-primary-400 transition-all"
+                >
+                  <option value="">Selecione um funil</option>
+                  {funnels.map(f => (
+                    <option key={f.id} value={f.id}>{f.name}</option>
+                  ))}
+                </select>
+              </div>
+
+              {bulkFunnelId && (
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">Etapa</label>
+                  <select
+                    value={bulkStageId}
+                    onChange={(e) => setBulkStageId(e.target.value)}
+                    className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm bg-white focus:ring-2 focus:ring-primary-200 focus:border-primary-400 transition-all"
+                  >
+                    <option value="">Selecione uma etapa</option>
+                    {bulkStagesForFunnel.map(s => (
+                      <option key={s.id} value={s.id}>{s.name}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
+            </div>
+
+            <div className="flex items-center justify-end gap-3">
+              <button
+                onClick={() => setShowBulkMoveModal(false)}
+                disabled={savingBulkMove}
+                className="px-4 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-100 rounded-xl transition-colors disabled:opacity-50"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={handleBulkMove}
+                disabled={savingBulkMove || !bulkFunnelId || !bulkStageId}
+                className="px-4 py-2.5 bg-primary-600 text-white rounded-xl font-medium text-sm hover:bg-primary-700 transition-colors flex items-center gap-2 disabled:opacity-50"
+              >
+                {savingBulkMove ? (
+                  <>
+                    <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                    Movendo...
+                  </>
+                ) : (
+                  <>
+                    <FunnelIcon className="w-4 h-4" />
+                    Mover {selectedIds.size} {selectedIds.size === 1 ? 'contato' : 'contatos'}
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Modal de Mudança de Etapa */}
       {stageChangeClient && (
         <div className="fixed inset-0 z-50 flex items-center justify-center">
@@ -2175,6 +2505,8 @@ export default function ContatosPage() {
               setShowImportModal(false)
               setImportFile(null)
               setImportPreview([])
+              setImportFunnelId('')
+              setImportStageId('')
             }}
           />
           <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-2xl overflow-hidden">
@@ -2186,23 +2518,52 @@ export default function ContatosPage() {
                 </div>
                 <div>
                   <h3 className="text-base font-bold text-slate-800">Importar Contatos</h3>
-                  <p className="text-xs text-slate-500">Carregue um arquivo CSV com seus contatos</p>
+                  <p className="text-xs text-slate-500">Carregue um arquivo CSV ou Excel (.xlsx) com seus contatos</p>
                 </div>
               </div>
-              <button
-                onClick={() => {
-                  setShowImportModal(false)
-                  setImportFile(null)
-                  setImportPreview([])
-                }}
-                className="p-2 rounded-lg hover:bg-slate-100 transition-colors"
-              >
-                <Cross2Icon className="w-4 h-4 text-slate-400" />
-              </button>
+              {!importing && (
+                <button
+                  onClick={() => {
+                    setShowImportModal(false)
+                    setImportFile(null)
+                    setImportPreview([])
+                    setImportFunnelId('')
+                    setImportStageId('')
+                  }}
+                  className="p-2 rounded-lg hover:bg-slate-100 transition-colors"
+                >
+                  <Cross2Icon className="w-4 h-4 text-slate-400" />
+                </button>
+              )}
             </div>
 
+            {/* Progress screen */}
+            {importing && importProgress && (
+              <div className="p-10 flex flex-col items-center justify-center">
+                <div className="w-16 h-16 rounded-full bg-emerald-100 flex items-center justify-center mb-6">
+                  <ArrowUpTrayIcon className="w-8 h-8 text-emerald-600 animate-pulse" />
+                </div>
+                <h4 className="text-lg font-bold text-slate-800 mb-1">Importando contatos...</h4>
+                <p className="text-sm text-slate-500 mb-6">
+                  {importProgress.current} de {importProgress.total} contato{importProgress.total !== 1 ? 's' : ''}
+                </p>
+                <div className="w-full max-w-xs">
+                  <div className="w-full bg-slate-200 rounded-full h-3 overflow-hidden">
+                    <div
+                      className="h-full bg-gradient-to-r from-emerald-500 to-teal-500 rounded-full transition-all duration-300 ease-out"
+                      style={{ width: `${importProgress.total > 0 ? Math.round((importProgress.current / importProgress.total) * 100) : 0}%` }}
+                    />
+                  </div>
+                  <p className="text-center text-sm font-semibold text-emerald-600 mt-2">
+                    {importProgress.total > 0 ? Math.round((importProgress.current / importProgress.total) * 100) : 0}%
+                  </p>
+                </div>
+                <p className="text-xs text-slate-400 mt-4">Nao feche esta janela</p>
+              </div>
+            )}
+
             {/* Content */}
-            <div className="p-6">
+            <div className={`p-6 ${importing ? 'hidden' : ''}`}>
               {/* Upload area */}
               <label className="block">
                 <div className={`relative border-2 border-dashed rounded-2xl p-8 text-center cursor-pointer transition-all ${
@@ -2212,7 +2573,7 @@ export default function ContatosPage() {
                 }`}>
                   <input
                     type="file"
-                    accept=".csv"
+                    accept=".csv,.xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
                     onChange={handleImportFileChange}
                     className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
                   />
@@ -2229,8 +2590,8 @@ export default function ContatosPage() {
                       <div className="w-12 h-12 rounded-full bg-slate-100 flex items-center justify-center mx-auto">
                         <ArrowUpTrayIcon className="w-6 h-6 text-slate-400" />
                       </div>
-                      <p className="text-sm font-medium text-slate-700">Clique ou arraste um arquivo CSV</p>
-                      <p className="text-xs text-slate-500">Colunas: Nome, Telefone, Email, Empresa, Ramo, Origem</p>
+                      <p className="text-sm font-medium text-slate-700">Clique ou arraste um arquivo CSV ou Excel</p>
+                      <p className="text-xs text-slate-500">Colunas aceitas: Nome/Razao Social, Telefone, Email, Empresa, Ramo, CNPJ, Socios, Endereco e mais</p>
                     </div>
                   )}
                 </div>
@@ -2267,6 +2628,49 @@ export default function ContatosPage() {
                 </div>
               )}
 
+              {/* Funnel destination */}
+              {funnels.length > 0 && (
+                <div className="mt-6 p-4 bg-slate-50 rounded-xl border border-slate-200">
+                  <div className="flex items-center gap-2 mb-3">
+                    <FunnelIcon className="w-4 h-4 text-primary" />
+                    <p className="text-sm font-semibold text-slate-700">Destino no funil</p>
+                    <span className="text-xs text-slate-400">(opcional)</span>
+                  </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs font-medium text-slate-500 mb-1">Funil</label>
+                      <select
+                        value={importFunnelId}
+                        onChange={(e) => {
+                          setImportFunnelId(e.target.value)
+                          setImportStageId('')
+                        }}
+                        className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary/30"
+                      >
+                        <option value="">Nenhum</option>
+                        {funnels.map((f) => (
+                          <option key={f.id} value={f.id}>{f.name}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-slate-500 mb-1">Etapa</label>
+                      <select
+                        value={importStageId}
+                        onChange={(e) => setImportStageId(e.target.value)}
+                        disabled={!importFunnelId}
+                        className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary/30 disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        <option value="">Selecione a etapa</option>
+                        {importStagesForFunnel.map((s) => (
+                          <option key={s.id} value={s.id}>{s.name}</option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+                </div>
+              )}
+
               {/* Info */}
               <div className="mt-6 p-4 bg-blue-50 rounded-xl border border-blue-100">
                 <div className="flex gap-3">
@@ -2288,33 +2692,70 @@ export default function ContatosPage() {
             </div>
 
             {/* Footer */}
-            <div className="flex items-center justify-end gap-3 px-6 py-4 border-t border-slate-100 bg-slate-50/50">
+            {!importing && (
+              <div className="flex items-center justify-end gap-3 px-6 py-4 border-t border-slate-100 bg-slate-50/50">
+                <button
+                  onClick={() => {
+                    setShowImportModal(false)
+                    setImportFile(null)
+                    setImportPreview([])
+                    setImportFunnelId('')
+                    setImportStageId('')
+                  }}
+                  className="px-4 py-2.5 text-sm font-medium text-slate-600 hover:bg-white rounded-xl transition-colors"
+                >
+                  Cancelar
+                </button>
+                <button
+                  onClick={handleImport}
+                  disabled={!importFile || importing}
+                  className="flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-emerald-600 to-teal-600 text-white rounded-xl font-medium text-sm hover:from-emerald-700 hover:to-teal-700 transition-all shadow-lg shadow-emerald-200 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <ArrowUpTrayIcon className="w-4 h-4" />
+                  Importar Contatos
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Import Result Modal */}
+      {importResult && (
+        <div className="fixed inset-0 z-[10000] flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={() => setImportResult(null)} />
+          <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-sm overflow-hidden animate-in zoom-in-95 fade-in duration-200">
+            <div className="p-8 text-center">
+              {importResult.success ? (
+                <>
+                  <div className="w-16 h-16 rounded-full bg-emerald-100 flex items-center justify-center mx-auto mb-4">
+                    <CheckIcon className="w-8 h-8 text-emerald-600" />
+                  </div>
+                  <h3 className="text-lg font-bold text-slate-800 mb-1">Importação concluída!</h3>
+                  <p className="text-sm text-slate-500">
+                    <span className="font-semibold text-emerald-600">{importResult.count}</span> contato{importResult.count !== 1 ? 's' : ''} importado{importResult.count !== 1 ? 's' : ''} com sucesso.
+                  </p>
+                </>
+              ) : (
+                <>
+                  <div className="w-16 h-16 rounded-full bg-red-100 flex items-center justify-center mx-auto mb-4">
+                    <Cross2Icon className="w-8 h-8 text-red-600" />
+                  </div>
+                  <h3 className="text-lg font-bold text-slate-800 mb-1">Erro na importação</h3>
+                  <p className="text-sm text-slate-500">Ocorreu um erro ao importar os contatos. Verifique o arquivo e tente novamente.</p>
+                </>
+              )}
+            </div>
+            <div className="px-8 pb-6">
               <button
-                onClick={() => {
-                  setShowImportModal(false)
-                  setImportFile(null)
-                  setImportPreview([])
-                }}
-                className="px-4 py-2.5 text-sm font-medium text-slate-600 hover:bg-white rounded-xl transition-colors"
+                onClick={() => setImportResult(null)}
+                className={`w-full py-2.5 rounded-xl font-medium text-sm text-white transition-colors ${
+                  importResult.success
+                    ? 'bg-emerald-600 hover:bg-emerald-700'
+                    : 'bg-red-600 hover:bg-red-700'
+                }`}
               >
-                Cancelar
-              </button>
-              <button
-                onClick={handleImport}
-                disabled={!importFile || importing}
-                className="flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-emerald-600 to-teal-600 text-white rounded-xl font-medium text-sm hover:from-emerald-700 hover:to-teal-700 transition-all shadow-lg shadow-emerald-200 disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                {importing ? (
-                  <>
-                    <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                    Importando...
-                  </>
-                ) : (
-                  <>
-                    <ArrowUpTrayIcon className="w-4 h-4" />
-                    Importar Contatos
-                  </>
-                )}
+                Fechar
               </button>
             </div>
           </div>

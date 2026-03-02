@@ -337,16 +337,8 @@ async function handleEndOfCall(body: VapiEndOfCallReport): Promise<NextResponse>
           break
       }
 
-      // Montar follow-up com resumo e transcrição
+      // Montar follow-up apenas com resumo (transcricao completa fica no CallRecord)
       const phoneInfo = totalPhones > 1 ? `\nTelefone: ${phoneIndex + 1}/${totalPhones}` : ''
-
-      // Preparar trecho da transcrição (limitar a 1500 chars para não poluir o follow-up)
-      let transcriptExcerpt = ''
-      if (transcript) {
-        transcriptExcerpt = transcript.length > 1500
-          ? transcript.substring(0, 1500) + '...'
-          : transcript
-      }
 
       const followupParts = [
         `Ligação de prospecção`,
@@ -357,18 +349,8 @@ async function handleEndOfCall(body: VapiEndOfCallReport): Promise<NextResponse>
 
       if (summary) {
         followupParts.push(``, `Resumo: ${summary}`)
-      }
-
-      if (transcriptExcerpt) {
-        followupParts.push(``, `Transcrição:`, transcriptExcerpt)
-      }
-
-      if (!summary && !transcriptExcerpt) {
+      } else {
         followupParts.push(``, `Resumo: Não disponível`)
-      }
-
-      if (recordingUrl) {
-        followupParts.push(``, `Gravação: ${recordingUrl}`)
       }
 
       const followupText = followupParts.join('\n')
@@ -377,7 +359,7 @@ async function handleEndOfCall(body: VapiEndOfCallReport): Promise<NextResponse>
 
       // 1. Registrar follow-up
       try {
-        await addFollowUp(clientId, followupText, 'agente-voz')
+        await addFollowUp(clientId, followupText, 'agente-voz', recordingUrl || undefined)
       } catch (followupError) {
         console.error('[VAPI WEBHOOK] Error adding follow-up:', followupError)
       }

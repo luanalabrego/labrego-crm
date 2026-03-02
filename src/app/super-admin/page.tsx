@@ -40,6 +40,7 @@ export default function SuperAdminPage() {
   const [editingOrg, setEditingOrg] = useState<Organization | null>(null)
   const [form, setForm] = useState<OrgForm>(emptyForm)
   const [submitting, setSubmitting] = useState(false)
+  const [togglingId, setTogglingId] = useState<string | null>(null)
   const [error, setError] = useState('')
 
   const fetchOrgs = useCallback(async () => {
@@ -106,6 +107,25 @@ export default function SuperAdminPage() {
     }
   }
 
+  const handleToggleStatus = async (org: Organization) => {
+    if (!userEmail) return
+    const newStatus = org.status === 'active' ? 'suspended' : 'active'
+    setTogglingId(org.id)
+    try {
+      const res = await fetch('/api/super-admin/organizations', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', 'x-user-email': userEmail },
+        body: JSON.stringify({ orgId: org.id, status: newStatus }),
+      })
+      if (!res.ok) throw new Error('Erro ao atualizar status')
+      setOrgs(prev => prev.map(o => o.id === org.id ? { ...o, status: newStatus } : o))
+    } catch (err) {
+      console.error('[super-admin] toggle status error:', err)
+    } finally {
+      setTogglingId(null)
+    }
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -137,8 +157,9 @@ export default function SuperAdminPage() {
             <thead>
               <tr className="border-b border-gray-100 bg-gray-50">
                 <th className="text-left px-4 py-3 font-medium text-gray-600">Nome</th>
+                <th className="text-left px-4 py-3 font-medium text-gray-600">Admin</th>
                 <th className="text-left px-4 py-3 font-medium text-gray-600">Plano</th>
-                <th className="text-left px-4 py-3 font-medium text-gray-600">Status</th>
+                <th className="text-center px-4 py-3 font-medium text-gray-600">Status</th>
                 <th className="text-right px-4 py-3 font-medium text-gray-600">Acoes</th>
               </tr>
             </thead>
@@ -146,11 +167,22 @@ export default function SuperAdminPage() {
               {orgs.map((org) => (
                 <tr key={org.id} className="border-b border-gray-50 hover:bg-gray-50 transition">
                   <td className="px-4 py-3 font-medium text-gray-900">{org.name}</td>
+                  <td className="px-4 py-3 text-gray-500 text-xs">{org.adminEmail || '—'}</td>
                   <td className="px-4 py-3 text-gray-600">{PLAN_DISPLAY[org.plan]?.displayName || org.plan}</td>
-                  <td className="px-4 py-3">
-                    <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${STATUS_COLORS[org.status] || 'bg-gray-100 text-gray-600'}`}>
-                      {STATUS_LABELS[org.status] || org.status}
-                    </span>
+                  <td className="px-4 py-3 text-center">
+                    <button
+                      onClick={() => handleToggleStatus(org)}
+                      disabled={togglingId === org.id}
+                      className="relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-primary-500/40 disabled:opacity-50"
+                      style={{ backgroundColor: org.status === 'active' ? '#22c55e' : '#d1d5db' }}
+                      title={org.status === 'active' ? 'Ativo — clique para inativar' : 'Inativo — clique para ativar'}
+                    >
+                      <span
+                        className={`inline-block h-4 w-4 rounded-full bg-white shadow transition-transform ${
+                          org.status === 'active' ? 'translate-x-6' : 'translate-x-1'
+                        }`}
+                      />
+                    </button>
                   </td>
                   <td className="px-4 py-3 text-right">
                     <button onClick={() => openEdit(org)} className="inline-flex items-center gap-1 text-primary-600 hover:text-primary-800 transition text-sm">

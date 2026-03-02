@@ -171,12 +171,16 @@ type Project = {
   status?: string
 }
 
+type FollowUpType = 'note' | 'whatsapp' | 'email' | 'call'
+
 type FollowUp = {
   id: string
   text: string
   author: string
   createdAt: string
   source?: 'followup' | 'log'
+  type?: FollowUpType
+  recordingUrl?: string
 }
 
 type Contract = {
@@ -347,7 +351,7 @@ export default function ContactDetailsPage() {
 
         // Load proposals
         const proposalsSnap = await getDocs(
-          query(collection(db, 'proposals'), where('clientId', '==', id))
+          query(collection(db, 'proposals'), where('clientId', '==', id), where('orgId', '==', orgId))
         )
         const proposalsData = proposalsSnap.docs.map((d) => ({
           id: d.id,
@@ -357,7 +361,7 @@ export default function ContactDetailsPage() {
 
         // Load billings
         const billingsSnap = await getDocs(
-          query(collection(db, 'billings'), where('clientId', '==', id))
+          query(collection(db, 'billings'), where('clientId', '==', id), where('orgId', '==', orgId))
         )
         setBillings(
           billingsSnap.docs.map((d) => ({ id: d.id, ...d.data() })) as Billing[]
@@ -386,6 +390,8 @@ export default function ContactDetailsPage() {
               author: data.author || data.email || 'Sistema',
               createdAt: data.createdAt,
               source: 'followup' as const,
+              type: (data.type as FollowUpType) || undefined,
+              recordingUrl: data.recordingUrl || undefined,
             } as FollowUp
           }),
           ...logsSnap.docs.map((d) => {
@@ -403,7 +409,7 @@ export default function ContactDetailsPage() {
 
         // Load contracts
         const contractsSnap = await getDocs(
-          query(collection(db, 'contracts'), where('clientId', '==', id))
+          query(collection(db, 'contracts'), where('clientId', '==', id), where('orgId', '==', orgId))
         )
         setContracts(
           contractsSnap.docs.map((d) => ({ id: d.id, ...d.data() })) as Contract[]
@@ -503,6 +509,8 @@ export default function ContactDetailsPage() {
         text: newFollowUp.trim(),
         author: userEmail || 'Usuário',
         createdAt: now,
+        type: 'note',
+        orgId,
       })
       // Update lastFollowUpAt to track last interaction instantly
       await updateDoc(doc(db, 'clients', id), {

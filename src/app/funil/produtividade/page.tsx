@@ -16,15 +16,23 @@ import {
   UserIcon,
   CalendarDaysIcon,
   CheckCircleIcon,
+  PhoneIcon,
+  EnvelopeIcon,
+  ChatBubbleLeftRightIcon,
+  ArrowsRightLeftIcon,
+  ChatBubbleLeftIcon,
 } from '@heroicons/react/24/outline'
+
+type ActionType = 'call' | 'email' | 'whatsapp' | 'stage_change' | 'followup'
 
 type ProductivityEntry = {
   author: string
-  createdAt: unknown // Can be string, Date, or Firestore Timestamp
+  createdAt: unknown
   source: 'followup' | 'log'
   clientId: string
   clientName: string
   clientStage: string
+  actionType: ActionType
 }
 
 type DailyProductivity = {
@@ -39,38 +47,39 @@ type ClientDetail = {
 }
 
 type ProductivityDetails = {
-  [key: string]: ClientDetail[] // key = "author|date"
+  [key: string]: ClientDetail[]
 }
 
-// Helper para converter valor de data (string, Timestamp, ou Date) para Date
+type TypeBreakdown = {
+  [author: string]: {
+    call: number
+    email: number
+    whatsapp: number
+    stage_change: number
+    followup: number
+    total: number
+  }
+}
+
 const parseDate = (value: unknown): Date | null => {
   if (!value) return null
-
-  // Se for um Firestore Timestamp (tem método toDate)
   if (typeof value === 'object' && value !== null && 'toDate' in value && typeof (value as { toDate: () => Date }).toDate === 'function') {
     return (value as { toDate: () => Date }).toDate()
   }
-
-  // Se já for uma Date
   if (value instanceof Date) {
     return isNaN(value.getTime()) ? null : value
   }
-
-  // Se for uma string
   if (typeof value === 'string') {
     const date = new Date(value)
     return isNaN(date.getTime()) ? null : date
   }
-
   return null
 }
 
-// Helper para formatar data como YYYY-MM-DD
 const formatDateKey = (date: Date): string => {
   return date.toISOString().split('T')[0]
 }
 
-// Helper para formatar data para exibição
 const formatDateDisplay = (dateKey: string): string => {
   const date = new Date(dateKey + 'T12:00:00')
   const weekdays = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb']
@@ -79,7 +88,6 @@ const formatDateDisplay = (dateKey: string): string => {
   return `${weekdays[date.getDay()]} ${day}/${month}`
 }
 
-// Gerar últimos N dias
 const getLast7Days = (): string[] => {
   const days: string[] = []
   const today = new Date()
@@ -91,28 +99,56 @@ const getLast7Days = (): string[] => {
   return days
 }
 
-// Calcular produtividade por autor e dia
-// Agrupa por cliente: múltiplas interações com o mesmo cliente em 1 hora = 1 ponto
-// Interações com clientes diferentes = conta cada uma
+const classifyFollowup = (data: Record<string, unknown>): ActionType => {
+  const author = (data.author as string) || ''
+  const text = (data.text as string) || ''
+  const source = (data.source as string) || ''
+
+  if (author === 'agente-voz' || data.recordingUrl || text.includes('Ligação de prospecção') || text.includes('Gravação:')) {
+    return 'call'
+  }
+  if (text.startsWith('[WhatsApp]') || source === 'whatsapp-extension') {
+    return 'whatsapp'
+  }
+  return 'followup'
+}
+
+const classifyLog = (data: Record<string, unknown>): ActionType => {
+  const action = (data.action as string) || ''
+  const text = (data.text as string) || (data.message as string) || ''
+  const type = (data.type as string) || ''
+  const source = (data.source as string) || ''
+
+  if (action === 'stage_change' || action === 'cadence_exhausted_move' ||
+      text.includes('Card movido de') || text.includes('Movido em massa de') ||
+      text.includes('Etapa alterada de')) {
+    return 'stage_change'
+  }
+  if (action === 'campaign_email_sent' || text.includes('Email enviado') || text.includes('Email falhou') || type === 'campaign') {
+    return 'email'
+  }
+  if (source === 'vapi-webhook' || text.includes('Ligação:')) {
+    return 'call'
+  }
+  if (text.startsWith('[WhatsApp]') || source === 'whatsapp-extension') {
+    return 'whatsapp'
+  }
+  return 'followup'
+}
+
 const calculateProductivity = (entries: ProductivityEntry[]): { productivity: DailyProductivity; details: ProductivityDetails } => {
   const productivity: DailyProductivity = {}
   const details: ProductivityDetails = {}
   const last7Days = getLast7Days()
 
-  // Agrupar entradas por autor e dia
   const entriesByAuthorAndDay: { [key: string]: ProductivityEntry[] } = {}
 
   for (const entry of entries) {
     if (!entry.author) continue
-
     const parsedDate = parseDate(entry.createdAt)
-    if (!parsedDate) continue // Ignorar entradas com data inválida
-
+    if (!parsedDate) continue
     const dateKey = formatDateKey(parsedDate)
-
-    // Ignorar entradas fora dos últimos 7 dias
     if (!last7Days.includes(dateKey)) continue
-
     const key = `${entry.author}|${dateKey}`
     if (!entriesByAuthorAndDay[key]) {
       entriesByAuthorAndDay[key] = []
@@ -120,10 +156,8 @@ const calculateProductivity = (entries: ProductivityEntry[]): { productivity: Da
     entriesByAuthorAndDay[key].push(entry)
   }
 
-  // Para cada autor/dia, agrupar por cliente em janelas de 1 hora
   for (const [key, dayEntries] of Object.entries(entriesByAuthorAndDay)) {
     const [author, date] = key.split('|')
-
     if (!productivity[author]) {
       productivity[author] = {}
       for (const day of last7Days) {
@@ -131,7 +165,6 @@ const calculateProductivity = (entries: ProductivityEntry[]): { productivity: Da
       }
     }
 
-    // Agrupar por cliente
     const entriesByClient: { [clientId: string]: ProductivityEntry[] } = {}
     for (const entry of dayEntries) {
       if (!entriesByClient[entry.clientId]) {
@@ -140,27 +173,23 @@ const calculateProductivity = (entries: ProductivityEntry[]): { productivity: Da
       entriesByClient[entry.clientId].push(entry)
     }
 
-    // Para cada cliente, contar interações únicas por hora
     let totalCount = 0
     const clientsContacted: ClientDetail[] = []
 
     for (const [, clientEntries] of Object.entries(entriesByClient)) {
-      // Ordenar por data
       const sorted = [...clientEntries].sort((a, b) => {
         const dateA = parseDate(a.createdAt)
         const dateB = parseDate(b.createdAt)
         return (dateA?.getTime() || 0) - (dateB?.getTime() || 0)
       })
 
-      // Agrupar em janelas de 1 hora
       let count = 0
       let lastTime: number | null = null
       const hourInMs = 60 * 60 * 1000
 
       for (const entry of sorted) {
         const parsedEntryDate = parseDate(entry.createdAt)
-        if (!parsedEntryDate) continue // Ignorar entradas com data inválida
-
+        if (!parsedEntryDate) continue
         const currentTime = parsedEntryDate.getTime()
         if (lastTime === null || currentTime - lastTime > hourInMs) {
           count++
@@ -169,8 +198,6 @@ const calculateProductivity = (entries: ProductivityEntry[]): { productivity: Da
       }
 
       totalCount += count
-
-      // Adicionar cliente à lista de detalhes (apenas uma vez por cliente)
       if (count > 0 && sorted[0]) {
         clientsContacted.push({
           name: sorted[0].clientName || 'Cliente desconhecido',
@@ -186,6 +213,14 @@ const calculateProductivity = (entries: ProductivityEntry[]): { productivity: Da
   return { productivity, details }
 }
 
+const ACTION_TYPE_CONFIG: Record<ActionType, { label: string; icon: React.ComponentType<React.SVGProps<SVGSVGElement>>; color: string; bgColor: string; borderColor: string }> = {
+  call: { label: 'Ligações', icon: PhoneIcon, color: 'text-green-700', bgColor: 'bg-green-50', borderColor: 'border-green-200' },
+  email: { label: 'Emails', icon: EnvelopeIcon, color: 'text-blue-700', bgColor: 'bg-blue-50', borderColor: 'border-blue-200' },
+  whatsapp: { label: 'WhatsApp', icon: ChatBubbleLeftRightIcon, color: 'text-emerald-700', bgColor: 'bg-emerald-50', borderColor: 'border-emerald-200' },
+  stage_change: { label: 'Mudanças de Etapa', icon: ArrowsRightLeftIcon, color: 'text-amber-700', bgColor: 'bg-amber-50', borderColor: 'border-amber-200' },
+  followup: { label: 'Follow-ups', icon: ChatBubbleLeftIcon, color: 'text-purple-700', bgColor: 'bg-purple-50', borderColor: 'border-purple-200' },
+}
+
 export default function ProdutividadePage() {
   const { orgId } = useCrmUser()
   const [entries, setEntries] = useState<ProductivityEntry[]>([])
@@ -197,12 +232,10 @@ export default function ProdutividadePage() {
     try {
       const allEntries: ProductivityEntry[] = []
 
-      // Calcular data de 7 dias atrás para filtrar no Firebase
       const sevenDaysAgo = new Date()
       sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7)
       const sevenDaysAgoStr = sevenDaysAgo.toISOString()
 
-      // Buscar as etapas do funil para ter os nomes
       const funnelStagesSnap = await getDocs(query(collection(db, 'funnelStages'), where('orgId', '==', orgId)))
       const stagesMap: { [id: string]: string } = {}
       funnelStagesSnap.docs.forEach((doc) => {
@@ -210,7 +243,6 @@ export default function ProdutividadePage() {
         stagesMap[doc.id] = data.name || 'Sem etapa'
       })
 
-      // Buscar todos os clientes para ter nome e etapa
       const clientsSnap = await getDocs(query(collection(db, 'clients'), where('orgId', '==', orgId)))
       const clientsMap: { [id: string]: { name: string; stage: string } } = {}
       clientsSnap.docs.forEach((doc) => {
@@ -222,7 +254,6 @@ export default function ProdutividadePage() {
         }
       })
 
-      // Usar collectionGroup para buscar todos os followups de uma vez
       const followupsSnap = await getDocs(
         query(
           collectionGroup(db, 'followups'),
@@ -231,10 +262,10 @@ export default function ProdutividadePage() {
       )
       followupsSnap.docs.forEach((doc) => {
         const data = doc.data()
-        // Extrair clientId do path: clients/{clientId}/followups/{docId}
         const pathParts = doc.ref.path.split('/')
         const clientId = pathParts[1] || ''
-        const clientInfo = clientsMap[clientId] || { name: 'Cliente desconhecido', stage: 'Sem etapa' }
+        if (!clientsMap[clientId]) return // Skip clients from other orgs
+        const clientInfo = clientsMap[clientId]
         if (data.author && data.createdAt && clientId) {
           allEntries.push({
             author: data.author,
@@ -243,11 +274,11 @@ export default function ProdutividadePage() {
             clientId,
             clientName: clientInfo.name,
             clientStage: clientInfo.stage,
+            actionType: classifyFollowup(data as Record<string, unknown>),
           })
         }
       })
 
-      // Usar collectionGroup para buscar todos os logs de uma vez
       const logsSnap = await getDocs(
         query(
           collectionGroup(db, 'logs'),
@@ -256,10 +287,10 @@ export default function ProdutividadePage() {
       )
       logsSnap.docs.forEach((doc) => {
         const data = doc.data()
-        // Extrair clientId do path: clients/{clientId}/logs/{docId}
         const pathParts = doc.ref.path.split('/')
         const clientId = pathParts[1] || ''
-        const clientInfo = clientsMap[clientId] || { name: 'Cliente desconhecido', stage: 'Sem etapa' }
+        if (!clientsMap[clientId]) return // Skip clients from other orgs
+        const clientInfo = clientsMap[clientId]
         if (data.author && data.createdAt && clientId) {
           allEntries.push({
             author: data.author,
@@ -268,6 +299,7 @@ export default function ProdutividadePage() {
             clientId,
             clientName: clientInfo.name,
             clientStage: clientInfo.stage,
+            actionType: classifyLog(data as Record<string, unknown>),
           })
         }
       })
@@ -296,7 +328,38 @@ export default function ProdutividadePage() {
   const last7Days = useMemo(() => getLast7Days(), [])
   const authors = useMemo(() => Object.keys(productivity).sort(), [productivity])
 
-  // Calcular totais
+  // Totais globais por tipo de ação
+  const globalTypeCounts = useMemo(() => {
+    const counts: Record<ActionType, number> = { call: 0, email: 0, whatsapp: 0, stage_change: 0, followup: 0 }
+    for (const entry of entries) {
+      const parsedDate = parseDate(entry.createdAt)
+      if (!parsedDate) continue
+      const dateKey = formatDateKey(parsedDate)
+      if (!last7Days.includes(dateKey)) continue
+      counts[entry.actionType]++
+    }
+    return counts
+  }, [entries, last7Days])
+
+  // Breakdown por autor e tipo
+  const typeBreakdown = useMemo((): TypeBreakdown => {
+    const breakdown: TypeBreakdown = {}
+    for (const entry of entries) {
+      const parsedDate = parseDate(entry.createdAt)
+      if (!parsedDate) continue
+      const dateKey = formatDateKey(parsedDate)
+      if (!last7Days.includes(dateKey)) continue
+      if (!entry.author) continue
+
+      if (!breakdown[entry.author]) {
+        breakdown[entry.author] = { call: 0, email: 0, whatsapp: 0, stage_change: 0, followup: 0, total: 0 }
+      }
+      breakdown[entry.author][entry.actionType]++
+      breakdown[entry.author].total++
+    }
+    return breakdown
+  }, [entries, last7Days])
+
   const totalsByAuthor = useMemo(() => {
     const totals: { [author: string]: number } = {}
     for (const author of authors) {
@@ -317,6 +380,25 @@ export default function ProdutividadePage() {
     Object.values(totalsByAuthor).reduce((a, b) => a + b, 0),
     [totalsByAuthor]
   )
+
+  const breakdownAuthors = useMemo(() =>
+    Object.keys(typeBreakdown).sort((a, b) => (typeBreakdown[b].total) - (typeBreakdown[a].total)),
+    [typeBreakdown]
+  )
+
+  const breakdownTotals = useMemo(() => {
+    const totals = { call: 0, email: 0, whatsapp: 0, stage_change: 0, followup: 0, total: 0 }
+    for (const author of breakdownAuthors) {
+      const a = typeBreakdown[author]
+      totals.call += a.call
+      totals.email += a.email
+      totals.whatsapp += a.whatsapp
+      totals.stage_change += a.stage_change
+      totals.followup += a.followup
+      totals.total += a.total
+    }
+    return totals
+  }, [breakdownAuthors, typeBreakdown])
 
   if (loading) {
     return (
@@ -367,7 +449,7 @@ export default function ProdutividadePage() {
         </div>
       </div>
 
-      {/* Summary Cards */}
+      {/* Summary Cards - Overview */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
         <div className="bg-white rounded-2xl border border-slate-200 p-4">
           <div className="flex items-center gap-2 text-slate-500 mb-2">
@@ -401,7 +483,129 @@ export default function ProdutividadePage() {
         </div>
       </div>
 
-      {/* Productivity Matrix */}
+      {/* Action Type Cards */}
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 mb-6">
+        {(Object.keys(ACTION_TYPE_CONFIG) as ActionType[]).map((type) => {
+          const config = ACTION_TYPE_CONFIG[type]
+          const Icon = config.icon
+          const count = globalTypeCounts[type]
+          return (
+            <div key={type} className={`${config.bgColor} rounded-2xl border ${config.borderColor} p-4`}>
+              <div className={`flex items-center gap-2 ${config.color} mb-2`}>
+                <Icon className="w-4 h-4" />
+                <span className="text-xs font-medium">{config.label}</span>
+              </div>
+              <p className={`text-2xl font-bold ${config.color}`}>{count}</p>
+            </div>
+          )
+        })}
+      </div>
+
+      {/* Breakdown by Type Table */}
+      <div className="bg-white rounded-2xl border border-slate-200 shadow-sm mb-6">
+        <div className="p-4 border-b border-slate-100">
+          <h2 className="font-semibold text-slate-800">Breakdown por Tipo de Ação</h2>
+          <p className="text-sm text-slate-500 mt-1">Totais por usuário nos últimos 7 dias</p>
+        </div>
+
+        {breakdownAuthors.length === 0 ? (
+          <div className="p-12 text-center">
+            <div className="w-16 h-16 bg-slate-100 rounded-full flex items-center justify-center mx-auto mb-4">
+              <UserIcon className="w-8 h-8 text-slate-400" />
+            </div>
+            <p className="text-slate-600 font-medium">Nenhuma atividade encontrada</p>
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full">
+              <thead>
+                <tr className="bg-slate-50">
+                  <th className="text-left px-4 py-3 text-sm font-semibold text-slate-700 min-w-[180px]">
+                    Usuário
+                  </th>
+                  {(Object.keys(ACTION_TYPE_CONFIG) as ActionType[]).map((type) => {
+                    const config = ACTION_TYPE_CONFIG[type]
+                    const Icon = config.icon
+                    return (
+                      <th key={type} className="text-center px-3 py-3 text-sm font-semibold text-slate-600 min-w-[90px]">
+                        <div className="flex items-center justify-center gap-1.5">
+                          <Icon className="w-3.5 h-3.5" />
+                          <span className="hidden md:inline">{config.label}</span>
+                        </div>
+                      </th>
+                    )
+                  })}
+                  <th className="text-center px-4 py-3 text-sm font-bold text-primary-700 bg-primary-50 min-w-[80px]">
+                    Total
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {breakdownAuthors.map((author, idx) => {
+                  const data = typeBreakdown[author]
+                  return (
+                    <tr
+                      key={author}
+                      className={`border-t border-slate-100 ${idx % 2 === 0 ? 'bg-white' : 'bg-slate-50/50'}`}
+                    >
+                      <td className="px-4 py-3">
+                        <div className="flex items-center gap-3">
+                          <div className="w-8 h-8 rounded-full bg-gradient-to-br from-primary-500 to-purple-600 flex items-center justify-center text-white font-semibold text-sm">
+                            {author.charAt(0).toUpperCase()}
+                          </div>
+                          <span className="font-medium text-slate-700 truncate max-w-[120px]" title={author}>
+                            {author}
+                          </span>
+                        </div>
+                      </td>
+                      {(Object.keys(ACTION_TYPE_CONFIG) as ActionType[]).map((type) => {
+                        const count = data[type]
+                        const config = ACTION_TYPE_CONFIG[type]
+                        return (
+                          <td key={type} className="text-center px-3 py-3">
+                            <span className={`inline-flex items-center justify-center w-10 h-10 rounded-xl font-semibold text-sm ${
+                              count === 0
+                                ? 'bg-slate-100 text-slate-400'
+                                : `${config.bgColor} ${config.color}`
+                            }`}>
+                              {count}
+                            </span>
+                          </td>
+                        )
+                      })}
+                      <td className="text-center px-4 py-3 bg-primary-50/50">
+                        <span className="inline-flex items-center justify-center w-12 h-10 rounded-xl bg-primary-100 text-primary-700 font-bold text-sm">
+                          {data.total}
+                        </span>
+                      </td>
+                    </tr>
+                  )
+                })}
+                {/* Totals row */}
+                <tr className="border-t-2 border-slate-200 bg-slate-100">
+                  <td className="px-4 py-3">
+                    <span className="font-bold text-slate-700">Total</span>
+                  </td>
+                  {(Object.keys(ACTION_TYPE_CONFIG) as ActionType[]).map((type) => (
+                    <td key={type} className="text-center px-3 py-3">
+                      <span className="inline-flex items-center justify-center w-10 h-10 rounded-xl bg-slate-200 text-slate-700 font-bold text-sm">
+                        {breakdownTotals[type]}
+                      </span>
+                    </td>
+                  ))}
+                  <td className="text-center px-4 py-3 bg-primary-100">
+                    <span className="inline-flex items-center justify-center w-12 h-10 rounded-xl bg-primary-600 text-white font-bold text-sm">
+                      {breakdownTotals.total}
+                    </span>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      {/* Productivity Matrix (existing heatmap) */}
       <div className="bg-white rounded-2xl border border-slate-200 shadow-sm">
         <div className="p-4 border-b border-slate-100">
           <h2 className="font-semibold text-slate-800">Matriz de Produtividade</h2>

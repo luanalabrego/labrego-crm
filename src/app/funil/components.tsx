@@ -961,6 +961,7 @@ export function ActivityLogView({ clients }: ActivityLogViewProps) {
             const date = parseDate(data.createdAt)
             if (!date) return acc
             const clientId = doc.ref.parent.parent?.id || ''
+            if (!clientNameMap.has(clientId)) return acc // Skip clients from other orgs
             acc.push({
               id: doc.id,
               clientId,
@@ -980,6 +981,7 @@ export function ActivityLogView({ clients }: ActivityLogViewProps) {
             const date = parseDate(data.createdAt)
             if (!date) return acc
             const clientId = doc.ref.parent.parent?.id || ''
+            if (!clientNameMap.has(clientId)) return acc // Skip clients from other orgs
             acc.push({
               id: doc.id,
               clientId,

@@ -33,6 +33,8 @@ import { usePermissions } from '@/hooks/usePermissions'
 import { useVisibleStages } from '@/hooks/useVisibleStages'
 import { leadSourceOptions, leadSourceIcons, leadTypeOptions } from '@/lib/leadSources'
 import { formatWhatsAppNumber } from '@/lib/format'
+import AudioPlayer from '@/components/AudioPlayer'
+import RichTextEditor from '@/components/RichTextEditor'
 import {
   Cross2Icon,
   PlusIcon,
@@ -74,6 +76,7 @@ import {
   UsersIcon,
   CurrencyDollarIcon,
   DocumentDuplicateIcon,
+  ArrowDownTrayIcon,
 } from '@heroicons/react/24/outline'
 import { toast } from 'sonner'
 
@@ -138,6 +141,7 @@ type FunnelStage = {
   countsForMetrics?: boolean // Se conta para métricas de tempo/atraso
   macroStageId?: string // ID da macro etapa (grupo) a qual pertence
   conversionType?: 'positive' | 'negative' | 'neutral' | 'final_conversion' // Tipo de conversão para métricas de funil
+  isProspectionStage?: boolean // Marcar como etapa de início da prospecção
 }
 
 type MacroStage = {
@@ -161,12 +165,16 @@ type CadenceStep = {
   condition?: 'responded' | 'not_responded' | null
 }
 
+type FollowUpType = 'note' | 'whatsapp' | 'email' | 'call'
+
 type FollowUp = {
   id: string
   text?: string
   author?: string
   createdAt: string
   source?: 'followup' | 'log'
+  type?: FollowUpType
+  recordingUrl?: string
 }
 
 type CostCenter = {
@@ -258,6 +266,14 @@ export default function FunilDetailPage() {
   // Responsible filter (admin/manager)
   const [filterAssignedTo, setFilterAssignedTo] = useState<string>('')
 
+  // Period filter
+  const [filterDateFrom, setFilterDateFrom] = useState<string>('')
+  const [filterDateTo, setFilterDateTo] = useState<string>('')
+
+  // Export states
+  const [exportingExcel, setExportingExcel] = useState(false)
+  const [exportingPdf, setExportingPdf] = useState(false)
+
   // Funnel metadata
   const [funnelName, setFunnelName] = useState<string>('')
   const [funnelColor, setFunnelColor] = useState<string>('#4f46e5')
@@ -340,6 +356,17 @@ export default function FunilDetailPage() {
   const [schedulingReturnClient, setSchedulingReturnClient] = useState<Cliente | null>(null)
   const [selectedReturnDate, setSelectedReturnDate] = useState('')
   const [savingReturn, setSavingReturn] = useState(false)
+
+  // WhatsApp & Email modal state
+  const [showWhatsAppModal, setShowWhatsAppModal] = useState(false)
+  const [showEmailModal, setShowEmailModal] = useState(false)
+  const [whatsappMessage, setWhatsappMessage] = useState('')
+  const [emailSubject, setEmailSubject] = useState('')
+  const [emailBody, setEmailBody] = useState('')
+  const [sendingWhatsApp, setSendingWhatsApp] = useState(false)
+  const [sendingEmail, setSendingEmail] = useState(false)
+  const [emailTemplates, setEmailTemplates] = useState<Array<{ id: string; name: string; subject: string; body: string }>>([])
+  const [savingTemplate, setSavingTemplate] = useState(false)
 
   // Table sort and filter state
   const [tableSortConfig, setTableSortConfig] = useState<TableSortConfig>({ key: null, direction: 'desc' })
@@ -450,6 +477,7 @@ export default function FunilDetailPage() {
   const [savingNote, setSavingNote] = useState(false)
   const [contactComments, setContactComments] = useState('')
   const [editingComments, setEditingComments] = useState(false)
+  const [logFilter, setLogFilter] = useState<string>('all')
 
   // Call contact state
   const [showCallConfirm, setShowCallConfirm] = useState(false)
@@ -639,7 +667,7 @@ export default function FunilDetailPage() {
           )),
         ])
 
-        // Mapear followups com source
+        // Mapear followups com source e type
         const followupsData: FollowUp[] = followupsSnap.docs.map((d) => {
           const data = d.data()
           return {
@@ -648,6 +676,8 @@ export default function FunilDetailPage() {
             author: data.author || data.email || 'Sistema',
             createdAt: data.createdAt,
             source: 'followup' as const,
+            type: (data.type as FollowUpType) || undefined,
+            recordingUrl: data.recordingUrl || undefined,
           }
         })
 
@@ -687,6 +717,23 @@ export default function FunilDetailPage() {
     }
   }, [selectedClient])
 
+  // Load email templates
+  useEffect(() => {
+    if (!showEmailModal || !orgId) return
+    const loadTemplates = async () => {
+      try {
+        const snap = await getDocs(query(
+          collection(db, 'organizations', orgId, 'emailTemplates'),
+          orderBy('createdAt', 'desc')
+        ))
+        setEmailTemplates(snap.docs.map(d => ({ id: d.id, ...d.data() } as { id: string; name: string; subject: string; body: string })))
+      } catch {
+        setEmailTemplates([])
+      }
+    }
+    loadTemplates()
+  }, [showEmailModal, orgId])
+
   // Load proposals for selected client (Story 11.3)
   useEffect(() => {
     if (!selectedClient) {
@@ -697,6 +744,7 @@ export default function FunilDetailPage() {
     const q = query(
       collection(db, 'proposals'),
       where('clientId', '==', selectedClient.id),
+      where('orgId', '==', orgId),
       orderBy('createdAt', 'desc')
     )
     const unsub = onSnapshot(q, (snap) => {
@@ -769,6 +817,24 @@ export default function FunilDetailPage() {
       } else {
         result = result.filter((c) => c.assignedTo === filterAssignedTo)
       }
+    }
+
+    // Apply period filter
+    if (filterDateFrom) {
+      const from = new Date(filterDateFrom)
+      from.setHours(0, 0, 0, 0)
+      result = result.filter((c) => {
+        const created = c.createdAt ? new Date(c.createdAt) : null
+        return created && created >= from
+      })
+    }
+    if (filterDateTo) {
+      const to = new Date(filterDateTo)
+      to.setHours(23, 59, 59, 999)
+      result = result.filter((c) => {
+        const created = c.createdAt ? new Date(c.createdAt) : null
+        return created && created <= to
+      })
     }
 
     // Apply text search filter
@@ -886,7 +952,7 @@ export default function FunilDetailPage() {
     }
 
     return result
-  }, [clients, searchTerm, advancedFilters, activeAdvancedFiltersCount, viewScope, member?.id, filterAssignedTo])
+  }, [clients, searchTerm, advancedFilters, activeAdvancedFiltersCount, viewScope, member?.id, filterAssignedTo, filterDateFrom, filterDateTo])
 
   // Apply funnelAccess stage filter
   const visibleFunnelStages = useMemo(() => filterStages(funnelStages), [funnelStages, filterStages])
@@ -1569,6 +1635,7 @@ export default function FunilDetailPage() {
         type: 'audit',
         author: authorName,
         authorId: member?.id || '',
+        orgId,
         metadata: {
           fromStageId: source.droppableId,
           toStageId: destination.droppableId,
@@ -1631,6 +1698,7 @@ export default function FunilDetailPage() {
         countsForMetrics: editingStage.countsForMetrics !== false,
         macroStageId: editingStage.macroStageId || deleteField(),
         conversionType: editingStage.conversionType || 'neutral',
+        isProspectionStage: editingStage.isProspectionStage || false,
         funnelId,
       })
       setEditingStage(null)
@@ -1821,6 +1889,8 @@ export default function FunilDetailPage() {
         text: newNote.trim(),
         author: userEmail || 'Usuário',
         createdAt: now,
+        type: 'note',
+        orgId,
       })
       await updateDoc(doc(db, 'clients', selectedClient.id), {
         lastFollowUpAt: now,
@@ -1835,6 +1905,175 @@ export default function FunilDetailPage() {
       console.error('Error saving note:', error)
     } finally {
       setSavingNote(false)
+    }
+  }
+
+  // Send WhatsApp message from detail panel
+  const handleSendWhatsAppMessage = async () => {
+    if (!selectedClient?.phone || !whatsappMessage.trim()) return
+    setSendingWhatsApp(true)
+    try {
+      const response = await fetch('/api/extension/messages', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          to: selectedClient.phone,
+          message: whatsappMessage,
+          channel: 'whatsapp',
+        }),
+      })
+      if (response.ok) {
+        await addDoc(collection(db, 'clients', selectedClient.id, 'followups'), {
+          text: `WhatsApp enviado: ${whatsappMessage}`,
+          author: userEmail || 'Sistema',
+          createdAt: new Date().toISOString(),
+          source: 'followup',
+          type: 'whatsapp',
+          orgId,
+        })
+        toast.success('WhatsApp enviado com sucesso!')
+        setShowWhatsAppModal(false)
+        setWhatsappMessage('')
+      } else {
+        toast.error('Erro ao enviar WhatsApp')
+      }
+    } catch {
+      toast.error('Erro ao enviar WhatsApp')
+    } finally {
+      setSendingWhatsApp(false)
+    }
+  }
+
+  // Send Email from detail panel
+  const handleSendEmailMessage = async () => {
+    if (!selectedClient?.email || !emailSubject.trim() || !emailBody.trim()) return
+    setSendingEmail(true)
+    try {
+      const response = await fetch('/api/email/send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          to: selectedClient.email,
+          subject: emailSubject,
+          body: emailBody,
+        }),
+      })
+      if (response.ok) {
+        await addDoc(collection(db, 'clients', selectedClient.id, 'followups'), {
+          text: `Email enviado: ${emailSubject}`,
+          author: userEmail || 'Sistema',
+          createdAt: new Date().toISOString(),
+          source: 'followup',
+          type: 'email',
+          orgId,
+        })
+        toast.success('Email enviado com sucesso!')
+        setShowEmailModal(false)
+        setEmailSubject('')
+        setEmailBody('')
+      } else {
+        toast.error('Erro ao enviar email')
+      }
+    } catch {
+      toast.error('Erro ao enviar email')
+    } finally {
+      setSendingEmail(false)
+    }
+  }
+
+  // Export to Excel
+  const handleExportExcel = async () => {
+    setExportingExcel(true)
+    try {
+      const XLSX = await import('xlsx')
+      const data = filteredClients.map((c) => ({
+        Nome: c.name || '',
+        Empresa: c.company || '',
+        Telefone: c.phone || '',
+        Email: c.email || '',
+        Etapa: funnelStages.find((s) => s.id === c.funnelStage)?.name || '',
+        Responsável: c.assignedToName || 'Sem responsável',
+        'Dias na Etapa': c.funnelStageUpdatedAt
+          ? Math.floor((Date.now() - new Date(c.funnelStageUpdatedAt).getTime()) / 86400000)
+          : '',
+        'Último Follow-up': c.lastFollowUpAt
+          ? new Date(c.lastFollowUpAt).toLocaleDateString('pt-BR')
+          : '',
+        Status: c.status || '',
+        'Data Cadastro': c.createdAt ? new Date(c.createdAt).toLocaleDateString('pt-BR') : '',
+      }))
+      const ws = XLSX.utils.json_to_sheet(data)
+      const wb = XLSX.utils.book_new()
+      XLSX.utils.book_append_sheet(wb, ws, 'Contatos')
+      XLSX.writeFile(wb, `relatorio_${funnelName}_${new Date().toISOString().split('T')[0]}.xlsx`)
+    } catch (error) {
+      console.error('Erro ao exportar Excel:', error)
+      alert('Erro ao exportar relatório')
+    } finally {
+      setExportingExcel(false)
+    }
+  }
+
+  // Generate PDF summary
+  const handleGeneratePdf = async () => {
+    setExportingPdf(true)
+    try {
+      const { default: jsPDF } = await import('jspdf')
+      const { default: autoTable } = await import('jspdf-autotable')
+
+      const doc = new jsPDF()
+
+      // Header
+      doc.setFontSize(22)
+      doc.setTextColor(19, 222, 252)
+      doc.text('Voxium', 14, 20)
+      doc.setFontSize(10)
+      doc.setTextColor(100, 100, 100)
+      doc.text(`Funil: ${funnelName}`, 14, 28)
+      if (filterDateFrom || filterDateTo) {
+        doc.text(`Período: ${filterDateFrom || '...'} a ${filterDateTo || '...'}`, 14, 34)
+      }
+      doc.text(`Gerado em: ${new Date().toLocaleDateString('pt-BR')}`, 14, filterDateFrom || filterDateTo ? 40 : 34)
+
+      // KPIs
+      const totalContatos = filteredClients.length
+      const stageBreakdown: Record<string, number> = {}
+      filteredClients.forEach((c) => {
+        const stageName = funnelStages.find((s) => s.id === c.funnelStage)?.name || 'Sem etapa'
+        stageBreakdown[stageName] = (stageBreakdown[stageName] || 0) + 1
+      })
+
+      let yPos = filterDateFrom || filterDateTo ? 50 : 44
+      doc.setFontSize(14)
+      doc.setTextColor(30, 30, 30)
+      doc.text('Resumo', 14, yPos)
+      yPos += 8
+
+      doc.setFontSize(10)
+      doc.text(`Total de contatos: ${totalContatos}`, 14, yPos)
+      yPos += 6
+
+      // Stage breakdown table
+      const stageRows = Object.entries(stageBreakdown).map(([stage, count]) => [
+        stage,
+        String(count),
+        `${totalContatos > 0 ? Math.round((count / totalContatos) * 100) : 0}%`,
+      ])
+
+      autoTable(doc, {
+        startY: yPos + 4,
+        head: [['Etapa', 'Contatos', '%']],
+        body: stageRows,
+        theme: 'striped',
+        headStyles: { fillColor: [19, 222, 252] },
+      })
+
+      doc.save(`resumo_${funnelName}_${new Date().toISOString().split('T')[0]}.pdf`)
+    } catch (error) {
+      console.error('Erro ao gerar PDF:', error)
+      alert('Erro ao gerar resumo PDF')
+    } finally {
+      setExportingPdf(false)
     }
   }
 
@@ -1951,6 +2190,7 @@ export default function FunilDetailPage() {
         message: `Movido para funil ${targetFunnelName} → etapa ${targetStageName}`,
         text: `Cliente movido para funil ${targetFunnelName} → etapa ${targetStageName}`,
         type: 'audit',
+        orgId,
         author: authorName,
         authorId: member?.id || '',
         metadata: {
@@ -1987,6 +2227,8 @@ export default function FunilDetailPage() {
         text: quickFollowUpText.trim(),
         author: userEmail || 'Usuário',
         createdAt: now,
+        type: 'note',
+        orgId,
       })
       await updateDoc(doc(db, 'clients', quickFollowUpClient.id), {
         lastFollowUpAt: now,
@@ -2037,6 +2279,7 @@ export default function FunilDetailPage() {
         text: `Agendamento para ${returnDate.toLocaleDateString('pt-BR')}`,
         author: 'Sistema',
         createdAt: now,
+        orgId,
       })
 
       // Update selectedClient state to reflect the change immediately
@@ -2257,6 +2500,7 @@ export default function FunilDetailPage() {
           text: `Movido em massa de "${fromStageName}" para "${toStageName}"`,
           author: userEmail || 'Sistema',
           createdAt: now,
+          orgId,
         })
       })
 
@@ -2305,6 +2549,7 @@ export default function FunilDetailPage() {
             : `Centro de custos removido em massa (etapa: ${stageName})`,
           author: userEmail || 'Sistema',
           createdAt: now,
+          orgId,
         })
       })
 
@@ -2424,6 +2669,7 @@ export default function FunilDetailPage() {
             text: `Transferido para "${targetFunnelName}" → "${targetStageName}"`,
             author: userEmail || 'Sistema',
             createdAt: now,
+            orgId,
           }).catch(() => { /* log write failure is non-critical */ })
         ))
       }
@@ -2571,6 +2817,7 @@ export default function FunilDetailPage() {
         stepName: step.name,
         message: step.messageTemplate || '',
         createdAt: new Date().toISOString(),
+        orgId,
       })
 
       // Update lastFollowUpAt on client
@@ -2617,6 +2864,7 @@ export default function FunilDetailPage() {
         stepName: step.name,
         responded,
         createdAt: now,
+        orgId,
       })
 
       // If responded, we might want to reset or move to a new flow
@@ -2851,8 +3099,8 @@ export default function FunilDetailPage() {
                 </button>
               </div>
 
-              {/* Search and Filters */}
-              <div className="flex items-center gap-2">
+              {/* Search, Period Filters, and Export */}
+              <div className="flex items-center gap-2 flex-wrap">
                 <div className="relative">
                   <MagnifyingGlassIcon className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
                   <input
@@ -3195,6 +3443,53 @@ export default function FunilDetailPage() {
                     </>
                   )}
                 </div>
+
+                {/* Period Filter */}
+                <div className="flex items-center gap-1.5">
+                  <input
+                    type="date"
+                    value={filterDateFrom}
+                    onChange={(e) => setFilterDateFrom(e.target.value)}
+                    className="px-2 py-2 border border-slate-200 rounded-xl text-xs bg-white text-slate-600 focus:outline-none focus:ring-2 focus:ring-primary-500/20"
+                    title="Data início"
+                  />
+                  <span className="text-xs text-slate-400">a</span>
+                  <input
+                    type="date"
+                    value={filterDateTo}
+                    onChange={(e) => setFilterDateTo(e.target.value)}
+                    className="px-2 py-2 border border-slate-200 rounded-xl text-xs bg-white text-slate-600 focus:outline-none focus:ring-2 focus:ring-primary-500/20"
+                    title="Data fim"
+                  />
+                </div>
+
+                {/* Export Buttons */}
+                <button
+                  onClick={handleExportExcel}
+                  disabled={exportingExcel || filteredClients.length === 0}
+                  className="flex items-center gap-1.5 px-3 py-2 bg-green-600 text-white text-xs font-medium rounded-xl hover:bg-green-700 disabled:opacity-50 transition-colors"
+                  title="Exportar Excel"
+                >
+                  {exportingExcel ? (
+                    <div className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                  ) : (
+                    <ArrowDownTrayIcon className="w-3.5 h-3.5" />
+                  )}
+                  <span className="hidden lg:inline">Excel</span>
+                </button>
+                <button
+                  onClick={handleGeneratePdf}
+                  disabled={exportingPdf || filteredClients.length === 0}
+                  className="flex items-center gap-1.5 px-3 py-2 bg-red-600 text-white text-xs font-medium rounded-xl hover:bg-red-700 disabled:opacity-50 transition-colors"
+                  title="Gerar Resumo PDF"
+                >
+                  {exportingPdf ? (
+                    <div className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                  ) : (
+                    <DocumentTextIcon className="w-3.5 h-3.5" />
+                  )}
+                  <span className="hidden lg:inline">PDF</span>
+                </button>
               </div>
 
               {/* Actions Menu */}
@@ -4981,6 +5276,22 @@ export default function FunilDetailPage() {
                                 }`} style={{ transform: editingStage.countsForMetrics !== false ? 'translateX(22px)' : 'translateX(0)' }} />
                               </button>
                             </div>
+                            {/* Prospection Stage Toggle */}
+                            <div className="flex items-center justify-between">
+                              <div>
+                                <p className="text-sm font-medium text-slate-700">Etapa de Prospecção</p>
+                                <p className="text-xs text-slate-500">Marcar como etapa de início da prospecção</p>
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => setEditingStage({ ...editingStage, isProspectionStage: !editingStage.isProspectionStage })}
+                                className={`relative w-11 h-6 rounded-full transition-colors ${
+                                  editingStage.isProspectionStage ? 'bg-emerald-600' : 'bg-slate-300'
+                                }`}
+                              >
+                                <div className="absolute top-0.5 w-5 h-5 bg-white rounded-full shadow-sm transition-transform" style={{ transform: editingStage.isProspectionStage ? 'translateX(22px)' : 'translateX(0)', left: '2px' }} />
+                              </button>
+                            </div>
                             {/* Conversion Type Selector */}
                             <div>
                               <label className="block text-xs font-medium text-slate-600 mb-2">
@@ -5397,7 +5708,7 @@ export default function FunilDetailPage() {
             className="absolute inset-0 bg-black/40 backdrop-blur-sm"
             onClick={() => setSelectedClient(null)}
           />
-          <div className="relative ml-auto w-full max-w-4xl bg-white shadow-2xl flex h-full">
+          <div className="relative ml-auto w-full max-w-6xl bg-white shadow-2xl flex h-full">
             {/* Left side - Client Info */}
             <div className="w-1/2 border-r border-slate-200 flex flex-col h-full overflow-hidden">
               {/* Client Header */}
@@ -5670,6 +5981,26 @@ export default function FunilDetailPage() {
                       </a>
                     </div>
                   )}
+
+                  {/* Quick Action Buttons */}
+                  <div className="flex gap-2 mt-3">
+                    <button
+                      onClick={() => setShowWhatsAppModal(true)}
+                      disabled={!selectedClient.phone}
+                      className="flex-1 flex items-center justify-center gap-2 px-3 py-2 bg-green-600 text-white text-sm font-medium rounded-xl hover:bg-green-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      <ChatBubbleLeftRightIcon className="w-4 h-4" />
+                      Enviar WhatsApp
+                    </button>
+                    <button
+                      onClick={() => setShowEmailModal(true)}
+                      disabled={!selectedClient.email}
+                      className="flex-1 flex items-center justify-center gap-2 px-3 py-2 bg-blue-600 text-white text-sm font-medium rounded-xl hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      <EnvelopeClosedIcon className="w-4 h-4" />
+                      Enviar Email
+                    </button>
+                  </div>
                 </div>
 
                 {/* Additional Info */}
@@ -6275,10 +6606,32 @@ export default function FunilDetailPage() {
               {/* Notes Section */}
               <div className="flex-1 flex flex-col overflow-hidden">
                 <div className="px-6 py-4 border-b border-slate-100">
-                  <h4 className="text-sm font-semibold text-slate-700 flex items-center gap-2">
+                  <h4 className="text-sm font-semibold text-slate-700 flex items-center gap-2 mb-3">
                     <ChatBubbleIcon className="w-4 h-4 text-primary-500" />
                     Anotações & Follow-ups
                   </h4>
+                  <div className="flex flex-wrap gap-1.5">
+                    {[
+                      { key: 'all', label: 'Todos' },
+                      { key: 'note', label: 'Notas' },
+                      { key: 'whatsapp', label: 'WhatsApp' },
+                      { key: 'email', label: 'Email' },
+                      { key: 'call', label: 'Ligações' },
+                      { key: 'log', label: 'Sistema' },
+                    ].map((f) => (
+                      <button
+                        key={f.key}
+                        onClick={() => setLogFilter(f.key)}
+                        className={`px-2.5 py-1 rounded-full text-xs font-medium transition-all ${
+                          logFilter === f.key
+                            ? 'bg-primary-100 text-primary-700 ring-1 ring-primary-300'
+                            : 'bg-slate-100 text-slate-500 hover:bg-slate-200'
+                        }`}
+                      >
+                        {f.label}
+                      </button>
+                    ))}
+                  </div>
                 </div>
 
                 {/* New Note Input */}
@@ -6320,11 +6673,21 @@ export default function FunilDetailPage() {
                     </div>
                   ) : (
                     <div className="space-y-3">
-                      {clientFollowUps.map((note, index) => (
+                      {clientFollowUps.filter((n) => {
+                        if (logFilter === 'all') return true
+                        if (logFilter === 'log') return n.source === 'log'
+                        return n.source === 'followup' && (n.type || 'note') === logFilter
+                      }).map((note, index) => (
                         <div key={note.id} className="relative pl-6">
                           <div className={`absolute left-0 top-1.5 w-3 h-3 rounded-full ring-4 ${
                             note.source === 'log'
                               ? 'bg-slate-400 ring-slate-100'
+                              : note.type === 'whatsapp'
+                              ? 'bg-green-500 ring-green-100'
+                              : note.type === 'email'
+                              ? 'bg-blue-500 ring-blue-100'
+                              : note.type === 'call'
+                              ? 'bg-amber-500 ring-amber-100'
                               : 'bg-primary-500 ring-primary-100'
                           }`} />
                           {index < clientFollowUps.length - 1 && (
@@ -6349,9 +6712,15 @@ export default function FunilDetailPage() {
                                 <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${
                                   note.source === 'log'
                                     ? 'bg-slate-200 text-slate-600'
+                                    : note.type === 'whatsapp'
+                                    ? 'bg-green-100 text-green-700'
+                                    : note.type === 'email'
+                                    ? 'bg-blue-100 text-blue-700'
+                                    : note.type === 'call'
+                                    ? 'bg-amber-100 text-amber-700'
                                     : 'bg-primary-100 text-primary-600'
                                 }`}>
-                                  {note.source === 'log' ? 'Log' : 'Anotação'}
+                                  {note.source === 'log' ? 'Sistema' : note.type === 'whatsapp' ? 'WhatsApp' : note.type === 'email' ? 'Email' : note.type === 'call' ? 'Ligação' : 'Nota'}
                                 </span>
                               </div>
                               <span className="text-xs text-slate-400">
@@ -6368,7 +6737,30 @@ export default function FunilDetailPage() {
                                 {note.author}
                               </p>
                             )}
-                            <p className="text-sm text-slate-600">{note.text}</p>
+                            <p className="text-sm text-slate-600 whitespace-pre-wrap">
+                              {/* Render text, replacing recording URLs with clickable links */}
+                              {note.text?.split('\n').map((line, li) => {
+                                const recordingMatch = line.match(/Gravação:\s*(https?:\/\/\S+)/)
+                                if (recordingMatch) {
+                                  return (
+                                    <span key={li} className="block">
+                                      Gravação:{' '}
+                                      <a href={recordingMatch[1]} target="_blank" rel="noopener noreferrer" className="text-primary-600 hover:underline text-xs">
+                                        Ouvir gravação
+                                      </a>
+                                    </span>
+                                  )
+                                }
+                                return <span key={li} className="block">{line}</span>
+                              })}
+                            </p>
+                            {/* Audio player with speed control */}
+                            {(note.recordingUrl || note.text?.includes('storage.vapi.ai')) && (() => {
+                              const url = note.recordingUrl || note.text?.match(/https?:\/\/storage\.vapi\.ai\/\S+/)?.[0]
+                              return url ? (
+                                <AudioPlayer url={url} />
+                              ) : null
+                            })()}
                           </div>
                         </div>
                       ))}
@@ -7602,6 +7994,173 @@ export default function FunilDetailPage() {
               >
                 {executingCrossFunnel ? 'Transferindo...' : 'Transferir'}
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* WhatsApp Modal */}
+      {showWhatsAppModal && selectedClient && (
+        <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/50 backdrop-blur-sm">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md mx-4 overflow-hidden">
+            <div className="flex items-center justify-between p-4 border-b border-slate-200 bg-green-50">
+              <div className="flex items-center gap-2">
+                <ChatBubbleLeftRightIcon className="w-5 h-5 text-green-600" />
+                <h3 className="text-lg font-semibold text-slate-800">Enviar WhatsApp</h3>
+              </div>
+              <button
+                onClick={() => { setShowWhatsAppModal(false); setWhatsappMessage('') }}
+                className="p-1 rounded-lg hover:bg-green-100 transition-colors"
+              >
+                <Cross2Icon className="w-4 h-4 text-slate-500" />
+              </button>
+            </div>
+            <div className="p-4 space-y-4">
+              <div>
+                <p className="text-sm text-slate-500 mb-1">Para: <span className="font-medium text-slate-700">{selectedClient.name}</span></p>
+                <p className="text-xs text-slate-400">{selectedClient.phone}</p>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">Mensagem</label>
+                <textarea
+                  value={whatsappMessage}
+                  onChange={(e) => setWhatsappMessage(e.target.value)}
+                  rows={4}
+                  className="w-full px-3 py-2 border border-slate-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-transparent resize-none"
+                  placeholder="Digite sua mensagem..."
+                />
+              </div>
+              <div className="flex gap-2 justify-end">
+                <button
+                  onClick={() => { setShowWhatsAppModal(false); setWhatsappMessage('') }}
+                  className="px-4 py-2 text-sm text-slate-600 hover:bg-slate-100 rounded-lg transition-colors"
+                >
+                  Cancelar
+                </button>
+                <button
+                  onClick={handleSendWhatsAppMessage}
+                  disabled={!whatsappMessage.trim() || sendingWhatsApp}
+                  className="px-4 py-2 text-sm font-medium text-white bg-green-600 hover:bg-green-700 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {sendingWhatsApp ? 'Enviando...' : 'Enviar WhatsApp'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Email Modal */}
+      {showEmailModal && selectedClient && (
+        <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/50 backdrop-blur-sm">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-3xl mx-4 overflow-hidden max-h-[90vh] flex flex-col">
+            <div className="flex items-center justify-between p-4 border-b border-slate-200 bg-blue-50">
+              <div className="flex items-center gap-2">
+                <EnvelopeClosedIcon className="w-5 h-5 text-blue-600" />
+                <h3 className="text-lg font-semibold text-slate-800">Enviar Email</h3>
+              </div>
+              <button
+                onClick={() => { setShowEmailModal(false); setEmailSubject(''); setEmailBody('') }}
+                className="p-1 rounded-lg hover:bg-blue-100 transition-colors"
+              >
+                <Cross2Icon className="w-4 h-4 text-slate-500" />
+              </button>
+            </div>
+            <div className="p-5 space-y-4 flex-1 overflow-y-auto">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm text-slate-500">Para: <span className="font-medium text-slate-700">{selectedClient.name}</span></p>
+                  <p className="text-xs text-slate-400">{selectedClient.email}</p>
+                </div>
+                {emailTemplates.length > 0 && (
+                  <select
+                    onChange={(e) => {
+                      const tpl = emailTemplates.find(t => t.id === e.target.value)
+                      if (tpl) {
+                        const replaceVars = (text: string) =>
+                          text
+                            .replace(/\{\{nome\}\}/g, selectedClient.name || '')
+                            .replace(/\{\{empresa\}\}/g, selectedClient.company || '')
+                            .replace(/\{\{email\}\}/g, selectedClient.email || '')
+                        setEmailSubject(replaceVars(tpl.subject))
+                        setEmailBody(replaceVars(tpl.body))
+                      }
+                      e.target.value = ''
+                    }}
+                    className="px-3 py-1.5 border border-slate-200 rounded-lg text-sm bg-white text-slate-600 focus:outline-none focus:ring-2 focus:ring-blue-500/20"
+                    defaultValue=""
+                  >
+                    <option value="" disabled>Usar template...</option>
+                    {emailTemplates.map(t => (
+                      <option key={t.id} value={t.id}>{t.name}</option>
+                    ))}
+                  </select>
+                )}
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">Assunto</label>
+                <input
+                  type="text"
+                  value={emailSubject}
+                  onChange={(e) => setEmailSubject(e.target.value)}
+                  className="w-full px-3 py-2 border border-slate-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  placeholder="Assunto do email..."
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">Mensagem</label>
+                <RichTextEditor
+                  value={emailBody}
+                  onChange={setEmailBody}
+                  placeholder="Escreva o corpo do email..."
+                />
+              </div>
+            </div>
+            <div className="flex items-center justify-between p-4 border-t border-slate-200 bg-slate-50">
+              <button
+                onClick={async () => {
+                  if (!emailSubject.trim() || !emailBody.trim()) return
+                  const name = window.prompt('Nome do template:')
+                  if (!name?.trim() || !orgId) return
+                  setSavingTemplate(true)
+                  try {
+                    await addDoc(collection(db, 'organizations', orgId, 'emailTemplates'), {
+                      name: name.trim(),
+                      subject: emailSubject,
+                      body: emailBody,
+                      createdAt: new Date().toISOString(),
+                    })
+                    const snap = await getDocs(query(
+                      collection(db, 'organizations', orgId, 'emailTemplates'),
+                      orderBy('createdAt', 'desc')
+                    ))
+                    setEmailTemplates(snap.docs.map(d => ({ id: d.id, ...d.data() } as { id: string; name: string; subject: string; body: string })))
+                  } catch (error) {
+                    console.error('Error saving template:', error)
+                  } finally {
+                    setSavingTemplate(false)
+                  }
+                }}
+                disabled={!emailSubject.trim() || !emailBody.trim() || savingTemplate}
+                className="text-sm text-slate-500 hover:text-slate-700 underline decoration-dotted disabled:opacity-40 disabled:no-underline"
+              >
+                {savingTemplate ? 'Salvando...' : 'Salvar como template'}
+              </button>
+              <div className="flex gap-2">
+                <button
+                  onClick={() => { setShowEmailModal(false); setEmailSubject(''); setEmailBody('') }}
+                  className="px-4 py-2 text-sm text-slate-600 hover:bg-slate-100 rounded-lg transition-colors"
+                >
+                  Cancelar
+                </button>
+                <button
+                  onClick={handleSendEmailMessage}
+                  disabled={!emailSubject.trim() || !emailBody.trim() || sendingEmail}
+                  className="px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {sendingEmail ? 'Enviando...' : 'Enviar Email'}
+                </button>
+              </div>
             </div>
           </div>
         </div>

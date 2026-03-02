@@ -100,14 +100,31 @@ export default function RootLayout({ children }: CrmLayoutProps) {
             const memberQuery = query(collectionGroup(db, 'members'), where('email', '==', email))
             const memberSnap = await getDocs(memberQuery)
             if (!memberSnap.empty) {
-              const memberDoc = memberSnap.docs[0]
-              const memberData = { id: memberDoc.id, ...memberDoc.data() } as OrgMember
+              // If user has memberships in multiple orgs, prioritize active status and most recent
+              let bestDoc = memberSnap.docs[0]
+              if (memberSnap.docs.length > 1) {
+                const sorted = [...memberSnap.docs].sort((a, b) => {
+                  const aData = a.data()
+                  const bData = b.data()
+                  // Active members first
+                  if (aData.status === 'active' && bData.status !== 'active') return -1
+                  if (bData.status === 'active' && aData.status !== 'active') return 1
+                  // Then by joinedAt descending (most recent first)
+                  return (bData.joinedAt || '').localeCompare(aData.joinedAt || '')
+                })
+                bestDoc = sorted[0]
+              }
+              const memberData = { id: bestDoc.id, ...bestDoc.data() } as OrgMember
               // O path é organizations/{orgId}/members/{memberId}
-              const orgRef = memberDoc.ref.parent.parent
+              const orgRef = bestDoc.ref.parent.parent
               if (orgRef) {
                 const orgDoc = await getDoc(orgRef)
                 if (orgDoc.exists()) {
                   const orgData = orgDoc.data()
+                  // Skip suspended organizations
+                  if (orgData?.status === 'suspended') {
+                    console.warn('[layout] Organization is suspended:', orgRef.id)
+                  }
                   setOrgId(orgRef.id)
                   setOrgName(orgData?.name || null)
                   setOrgPlan((orgData?.plan as PlanId) || 'basic')
@@ -279,11 +296,33 @@ export default function RootLayout({ children }: CrmLayoutProps) {
                   </svg>
                 </button>
 
-                {/* Title - mobile */}
-                <span className="md:hidden text-sm font-semibold text-slate-700">Voxium</span>
+                {/* Greeting - mobile */}
+                <span className="md:hidden text-sm font-semibold text-slate-700 truncate max-w-[180px]">
+                  {(() => {
+                    const h = currentTime.getHours()
+                    const greeting = h < 12 ? 'Bom dia' : h < 18 ? 'Boa tarde' : 'Boa noite'
+                    const firstName = (member?.displayName || userEmail?.split('@')[0] || '').split(' ')[0]
+                    return firstName ? `${greeting}, ${firstName}` : greeting
+                  })()}
+                </span>
 
-                {/* Spacer */}
-                <div className="hidden md:block" />
+                {/* Greeting - desktop */}
+                <div className="hidden md:flex items-center gap-2">
+                  <span className="text-sm text-slate-700">
+                    {(() => {
+                      const h = currentTime.getHours()
+                      const greeting = h < 12 ? 'Bom dia' : h < 18 ? 'Boa tarde' : 'Boa noite'
+                      const firstName = (member?.displayName || userEmail?.split('@')[0] || '').split(' ')[0]
+                      return firstName ? `${greeting}, ${firstName}` : greeting
+                    })()}
+                  </span>
+                  {orgName && (
+                    <>
+                      <span className="text-slate-300">|</span>
+                      <span className="text-sm font-medium text-primary-600">{orgName}</span>
+                    </>
+                  )}
+                </div>
 
                 {/* Right side */}
                 <div className="flex items-center gap-3">

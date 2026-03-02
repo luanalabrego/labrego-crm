@@ -36,11 +36,14 @@ const FUNNEL_COLORS = [
 type FunnelStageBasic = {
   id: string
   funnelId: string
+  name: string
+  order: number
 }
 
 type ClientBasic = {
   id: string
   funnelStage?: string
+  funnelId?: string
   funnelStageUpdatedAt?: string
   maxDays?: number
 }
@@ -66,6 +69,11 @@ export default function FunnelHubPage() {
   const [showCreateModal, setShowCreateModal] = useState(false)
   const [editingFunnel, setEditingFunnel] = useState<Funnel | null>(null)
   const [deletingFunnel, setDeletingFunnel] = useState<Funnel | null>(null)
+  const [deleteMode, setDeleteMode] = useState<'move' | 'discard'>('move')
+  const [destFunnelId, setDestFunnelId] = useState('')
+  const [destMode, setDestMode] = useState<'mirror' | 'single'>('mirror')
+  const [destStageId, setDestStageId] = useState('')
+  const [deleteProgress, setDeleteProgress] = useState<{ current: number; total: number } | null>(null)
   const [openMenuId, setOpenMenuId] = useState<string | null>(null)
 
   // Form state
@@ -78,7 +86,10 @@ export default function FunnelHubPage() {
   useEffect(() => {
     if (!orgId) return
     const unsub = onSnapshot(query(collection(db, 'funnelStages'), where('orgId', '==', orgId)), (snap) => {
-      setAllStages(snap.docs.map(d => ({ id: d.id, funnelId: (d.data().funnelId as string) || '' })))
+      setAllStages(snap.docs.map(d => {
+        const data = d.data()
+        return { id: d.id, funnelId: (data.funnelId as string) || '', name: (data.name as string) || '', order: (data.order as number) ?? 0 }
+      }))
     })
     return () => unsub()
   }, [orgId])
@@ -92,6 +103,7 @@ export default function FunnelHubPage() {
         return {
           id: d.id,
           funnelStage: data.funnelStage,
+          funnelId: data.funnelId,
           funnelStageUpdatedAt: data.funnelStageUpdatedAt,
         }
       }))
@@ -206,24 +218,102 @@ export default function FunnelHubPage() {
     }
   }
 
+  // Stages do funil destino (para dropdown)
+  const destStages = useMemo(() => {
+    if (!destFunnelId) return []
+    return allStages.filter(s => s.funnelId === destFunnelId).sort((a, b) => a.order - b.order)
+  }, [destFunnelId, allStages])
+
+  // Contatos do funil sendo excluido
+  const deletingFunnelContacts = useMemo(() => {
+    if (!deletingFunnel) return []
+    const stageIds = new Set(allStages.filter(s => s.funnelId === deletingFunnel.id).map(s => s.id))
+    return allClients.filter(c => c.funnelStage && stageIds.has(c.funnelStage))
+  }, [deletingFunnel, allStages, allClients])
+
   // Delete funnel
   const handleDelete = async () => {
     if (!orgId || !deletingFunnel) return
     setSaving(true)
     try {
-      // Delete all columns in this funnel's subcollection
-      const columnsRef = collection(db, 'organizations', orgId, 'funnels', deletingFunnel.id, 'columns')
+      const funnelId = deletingFunnel.id
+      const sourceStages = allStages.filter(s => s.funnelId === funnelId).sort((a, b) => a.order - b.order)
+      const contactsToMove = deletingFunnelContacts
+      const now = new Date().toISOString()
+
+      // 1. Move or unlink contacts
+      if (contactsToMove.length > 0) {
+        setDeleteProgress({ current: 0, total: contactsToMove.length })
+
+        if (deleteMode === 'move' && destFunnelId) {
+          const targetStages = allStages.filter(s => s.funnelId === destFunnelId).sort((a, b) => a.order - b.order)
+
+          for (let i = 0; i < contactsToMove.length; i++) {
+            const contact = contactsToMove[i]
+            let targetStageId = targetStages[0]?.id || ''
+
+            if (destMode === 'mirror') {
+              // Map by position
+              const sourceIdx = sourceStages.findIndex(s => s.id === contact.funnelStage)
+              const mappedIdx = sourceIdx >= 0 ? Math.min(sourceIdx, targetStages.length - 1) : 0
+              targetStageId = targetStages[mappedIdx]?.id || targetStages[0]?.id || ''
+            } else {
+              targetStageId = destStageId
+            }
+
+            await updateDoc(doc(db, 'clients', contact.id), {
+              funnelId: destFunnelId,
+              funnelStage: targetStageId,
+              funnelStageUpdatedAt: now,
+              updatedAt: now,
+            })
+            setDeleteProgress({ current: i + 1, total: contactsToMove.length })
+          }
+        } else {
+          // Discard - unlink contacts
+          for (let i = 0; i < contactsToMove.length; i++) {
+            await updateDoc(doc(db, 'clients', contactsToMove[i].id), {
+              funnelId: '',
+              funnelStage: null,
+              funnelStageUpdatedAt: now,
+              updatedAt: now,
+            })
+            setDeleteProgress({ current: i + 1, total: contactsToMove.length })
+          }
+        }
+      }
+
+      // 2. Delete funnelStages (root collection)
+      for (const stage of sourceStages) {
+        await deleteDoc(doc(db, 'funnelStages', stage.id))
+      }
+
+      // 3. Delete columns subcollection
+      const columnsRef = collection(db, 'organizations', orgId, 'funnels', funnelId, 'columns')
       const columnsSnap = await getDocs(columnsRef)
       for (const colDoc of columnsSnap.docs) {
         await deleteDoc(colDoc.ref)
       }
-      // Delete the funnel
-      await deleteDoc(doc(db, 'organizations', orgId, 'funnels', deletingFunnel.id))
-      toast.success('Funil excluido com sucesso!')
+
+      // 4. Delete the funnel
+      await deleteDoc(doc(db, 'organizations', orgId, 'funnels', funnelId))
+
+      const movedMsg = contactsToMove.length > 0
+        ? deleteMode === 'move'
+          ? ` ${contactsToMove.length} contato${contactsToMove.length !== 1 ? 's' : ''} movido${contactsToMove.length !== 1 ? 's' : ''}.`
+          : ` ${contactsToMove.length} contato${contactsToMove.length !== 1 ? 's' : ''} desvinculado${contactsToMove.length !== 1 ? 's' : ''}.`
+        : ''
+      toast.success(`Funil excluido com sucesso!${movedMsg}`)
       setDeletingFunnel(null)
+      setDeleteProgress(null)
+      setDeleteMode('move')
+      setDestFunnelId('')
+      setDestMode('mirror')
+      setDestStageId('')
     } catch (error) {
       console.error('Error deleting funnel:', error)
       toast.error('Erro ao excluir funil')
+      setDeleteProgress(null)
     } finally {
       setSaving(false)
     }
@@ -245,6 +335,11 @@ export default function FunnelHubPage() {
 
   const openDeleteModal = (funnel: Funnel) => {
     setDeletingFunnel(funnel)
+    setDeleteMode('move')
+    setDestFunnelId('')
+    setDestMode('mirror')
+    setDestStageId('')
+    setDeleteProgress(null)
     setOpenMenuId(null)
   }
 
@@ -463,35 +558,174 @@ export default function FunnelHubPage() {
       )}
 
       {/* Delete Confirmation Modal */}
-      {deletingFunnel && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={() => setDeletingFunnel(null)}>
-          <div className="bg-white rounded-xl shadow-xl p-6 max-w-sm w-full mx-4" onClick={e => e.stopPropagation()}>
-            <div className="w-12 h-12 bg-red-100 rounded-full flex items-center justify-center mx-auto mb-4">
-              <ExclamationTriangleIcon className="w-6 h-6 text-red-600" />
-            </div>
-            <h3 className="text-lg font-semibold text-center text-slate-900 mb-2">Excluir funil</h3>
-            <p className="text-sm text-center text-slate-500 mb-6">
-              Tem certeza que deseja excluir <strong>{deletingFunnel.name}</strong>?
-              Os contatos vinculados a este funil serao desvinculados.
-            </p>
-            <div className="flex gap-3">
-              <button
-                onClick={() => setDeletingFunnel(null)}
-                className="flex-1 px-4 py-2.5 text-sm font-medium text-slate-700 bg-slate-100 rounded-lg hover:bg-slate-200 transition-colors"
-              >
-                Cancelar
-              </button>
-              <button
-                onClick={handleDelete}
-                disabled={saving}
-                className="flex-1 px-4 py-2.5 text-sm font-medium text-white bg-red-600 rounded-lg hover:bg-red-700 transition-colors disabled:opacity-50"
-              >
-                {saving ? 'Excluindo...' : 'Excluir'}
-              </button>
+      {deletingFunnel && (() => {
+        const contactCount = deletingFunnelContacts.length
+        const otherFunnels = funnels.filter(f => f.id !== deletingFunnel.id)
+        const canMove = otherFunnels.length > 0 && contactCount > 0
+
+        // Validation for move mode
+        const moveValid = deleteMode === 'move' && destFunnelId && (destMode === 'mirror' || (destMode === 'single' && destStageId))
+
+        return (
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={() => !saving && setDeletingFunnel(null)}>
+            <div className="bg-white rounded-xl shadow-xl w-full max-w-md mx-4 overflow-hidden" onClick={e => e.stopPropagation()}>
+
+              {/* Progress screen */}
+              {saving && deleteProgress && (
+                <div className="p-10 flex flex-col items-center justify-center">
+                  <div className="w-16 h-16 rounded-full bg-red-100 flex items-center justify-center mb-6">
+                    <TrashIcon className="w-7 h-7 text-red-600 animate-pulse" />
+                  </div>
+                  <h4 className="text-lg font-bold text-slate-800 mb-1">
+                    {deleteMode === 'move' ? 'Movendo contatos...' : 'Desvinculando contatos...'}
+                  </h4>
+                  <p className="text-sm text-slate-500 mb-6">
+                    {deleteProgress.current} de {deleteProgress.total} contato{deleteProgress.total !== 1 ? 's' : ''}
+                  </p>
+                  <div className="w-full max-w-xs">
+                    <div className="w-full bg-slate-200 rounded-full h-3 overflow-hidden">
+                      <div
+                        className="h-full bg-gradient-to-r from-red-500 to-orange-500 rounded-full transition-all duration-300 ease-out"
+                        style={{ width: `${deleteProgress.total > 0 ? Math.round((deleteProgress.current / deleteProgress.total) * 100) : 0}%` }}
+                      />
+                    </div>
+                    <p className="text-center text-sm font-semibold text-red-600 mt-2">
+                      {deleteProgress.total > 0 ? Math.round((deleteProgress.current / deleteProgress.total) * 100) : 0}%
+                    </p>
+                  </div>
+                  <p className="text-xs text-slate-400 mt-4">Nao feche esta janela</p>
+                </div>
+              )}
+
+              {/* Main content */}
+              {!saving && (
+                <div className="p-6">
+                  <div className="w-12 h-12 bg-red-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                    <ExclamationTriangleIcon className="w-6 h-6 text-red-600" />
+                  </div>
+                  <h3 className="text-lg font-semibold text-center text-slate-900 mb-1">Excluir funil</h3>
+                  <p className="text-sm text-center text-slate-500 mb-5">
+                    Tem certeza que deseja excluir <strong>{deletingFunnel.name}</strong>?
+                  </p>
+
+                  {contactCount > 0 && (
+                    <div className="mb-5 px-3 py-2 bg-amber-50 border border-amber-200 rounded-lg text-sm text-amber-700 text-center">
+                      Este funil possui <strong>{contactCount}</strong> contato{contactCount !== 1 ? 's' : ''} vinculado{contactCount !== 1 ? 's' : ''}
+                    </div>
+                  )}
+
+                  {/* Options only if there are contacts AND other funnels */}
+                  {canMove && (
+                    <div className="space-y-3 mb-5">
+                      <p className="text-sm font-medium text-slate-700">O que fazer com os contatos?</p>
+
+                      {/* Option: Move */}
+                      <label className={`block p-3 border rounded-lg cursor-pointer transition-all ${deleteMode === 'move' ? 'border-primary-300 bg-primary-50/50' : 'border-slate-200 hover:border-slate-300'}`}>
+                        <div className="flex items-center gap-2">
+                          <input type="radio" checked={deleteMode === 'move'} onChange={() => setDeleteMode('move')} className="text-primary-600" />
+                          <span className="text-sm font-medium text-slate-800">Mover para outro funil</span>
+                        </div>
+
+                        {deleteMode === 'move' && (
+                          <div className="mt-3 ml-5 space-y-3">
+                            {/* Dest funnel */}
+                            <div>
+                              <label className="block text-xs font-medium text-slate-500 mb-1">Funil destino</label>
+                              <select
+                                value={destFunnelId}
+                                onChange={e => { setDestFunnelId(e.target.value); setDestStageId('') }}
+                                className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary/30"
+                              >
+                                <option value="">Selecionar funil...</option>
+                                {otherFunnels.map(f => (
+                                  <option key={f.id} value={f.id}>{f.name}</option>
+                                ))}
+                              </select>
+                            </div>
+
+                            {destFunnelId && (
+                              <div className="space-y-2">
+                                {/* Mirror option */}
+                                <label className={`flex items-start gap-2 p-2 rounded-lg cursor-pointer transition-all ${destMode === 'mirror' ? 'bg-primary-50' : 'hover:bg-slate-50'}`}>
+                                  <input type="radio" checked={destMode === 'mirror'} onChange={() => setDestMode('mirror')} className="mt-0.5 text-primary-600" />
+                                  <div>
+                                    <span className="text-sm font-medium text-slate-700">Espelhar etapas</span>
+                                    <p className="text-xs text-slate-400">Cada contato vai para a etapa equivalente por posicao</p>
+                                  </div>
+                                </label>
+
+                                {/* Single stage option */}
+                                <label className={`flex items-start gap-2 p-2 rounded-lg cursor-pointer transition-all ${destMode === 'single' ? 'bg-primary-50' : 'hover:bg-slate-50'}`}>
+                                  <input type="radio" checked={destMode === 'single'} onChange={() => setDestMode('single')} className="mt-0.5 text-primary-600" />
+                                  <div className="flex-1">
+                                    <span className="text-sm font-medium text-slate-700">Etapa unica</span>
+                                    <p className="text-xs text-slate-400 mb-2">Todos os contatos vao para uma mesma etapa</p>
+                                    {destMode === 'single' && (
+                                      <select
+                                        value={destStageId}
+                                        onChange={e => setDestStageId(e.target.value)}
+                                        className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary/30"
+                                      >
+                                        <option value="">Selecionar etapa...</option>
+                                        {destStages.map(s => (
+                                          <option key={s.id} value={s.id}>{s.name}</option>
+                                        ))}
+                                      </select>
+                                    )}
+                                  </div>
+                                </label>
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </label>
+
+                      {/* Option: Discard */}
+                      <label className={`block p-3 border rounded-lg cursor-pointer transition-all ${deleteMode === 'discard' ? 'border-red-300 bg-red-50/50' : 'border-slate-200 hover:border-slate-300'}`}>
+                        <div className="flex items-center gap-2">
+                          <input type="radio" checked={deleteMode === 'discard'} onChange={() => setDeleteMode('discard')} className="text-red-600" />
+                          <div>
+                            <span className="text-sm font-medium text-slate-800">Desvincular contatos</span>
+                            <p className="text-xs text-slate-400">Os contatos ficam sem funil</p>
+                          </div>
+                        </div>
+                      </label>
+                    </div>
+                  )}
+
+                  {/* No contacts message */}
+                  {contactCount === 0 && (
+                    <p className="text-sm text-slate-500 text-center mb-5">Este funil nao possui contatos vinculados.</p>
+                  )}
+
+                  {/* Contacts exist but no other funnels */}
+                  {contactCount > 0 && !canMove && (
+                    <p className="text-xs text-slate-400 text-center mb-5">
+                      Nao ha outros funis disponiveis. Os contatos serao desvinculados.
+                    </p>
+                  )}
+
+                  <div className="flex gap-3">
+                    <button
+                      onClick={() => setDeletingFunnel(null)}
+                      className="flex-1 px-4 py-2.5 text-sm font-medium text-slate-700 bg-slate-100 rounded-lg hover:bg-slate-200 transition-colors"
+                    >
+                      Cancelar
+                    </button>
+                    <button
+                      onClick={handleDelete}
+                      disabled={saving || (canMove && deleteMode === 'move' && !moveValid)}
+                      className="flex-1 px-4 py-2.5 text-sm font-medium text-white bg-red-600 rounded-lg hover:bg-red-700 transition-colors disabled:opacity-50"
+                    >
+                      Excluir Funil
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
-        </div>
-      )}
+        )
+      })()}
     </div>
   )
 

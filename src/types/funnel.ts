@@ -22,4 +22,5 @@ export interface FunnelColumn {
   countsForMetrics: boolean
   conversionType?: 'positive' | 'negative' | 'neutral' | 'final_conversion'
   macroStageId?: string
+  isProspectionStage?: boolean
 }

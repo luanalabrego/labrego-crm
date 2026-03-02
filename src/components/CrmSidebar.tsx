@@ -25,6 +25,9 @@ import {
   DocumentTextIcon,
   TagIcon,
   CurrencyDollarIcon,
+  ClockIcon,
+  BookOpenIcon,
+  EnvelopeIcon,
 } from '@heroicons/react/24/outline'
 import { ArrowRightOnRectangleIcon } from '@heroicons/react/24/outline'
 import { signOut } from 'firebase/auth'
@@ -88,9 +91,19 @@ const navItems: NavItem[] = [
 
 const agentesItems: NavItem[] = [
   {
-    label: 'Agente de Ligação',
-    href: '/ligacoes',
+    label: 'Configuração do Agente',
+    href: '/ligacoes/configuracao',
+    icon: <Cog6ToothIcon className="w-5 h-5" />,
+  },
+  {
+    label: 'Disparo Massivo',
+    href: '/ligacoes/disparo',
     icon: <PhoneArrowUpRightIcon className="w-5 h-5" />,
+  },
+  {
+    label: 'Historico de Ligacoes',
+    href: '/ligacoes/historico',
+    icon: <ClockIcon className="w-5 h-5" />,
   },
 ]
 
@@ -99,6 +112,11 @@ const adminItems: NavItem[] = [
     label: 'Usuarios',
     href: '/admin/usuarios',
     icon: <UsersIcon className="w-5 h-5" />,
+  },
+  {
+    label: 'Email',
+    href: '/admin/email',
+    icon: <EnvelopeIcon className="w-5 h-5" />,
   },
   {
     label: 'Funis',
@@ -124,6 +142,11 @@ const adminItems: NavItem[] = [
     label: 'Creditos',
     href: '/admin/creditos',
     icon: <CreditCardIcon className="w-5 h-5" />,
+  },
+  {
+    label: 'Estratégia Comercial',
+    href: '/admin/estrategia',
+    icon: <BookOpenIcon className="w-5 h-5" />,
   },
   {
     label: 'Meu Plano',

@@ -97,7 +97,7 @@ const ui = {
 /* ============================== Component =============================== */
 
 export default function UsuariosPage() {
-  const { orgId, userUid } = useCrmUser()
+  const { orgId, userUid, userEmail } = useCrmUser()
   const { can } = usePermissions()
   const { limits } = usePlan()
 
@@ -152,7 +152,7 @@ export default function UsuariosPage() {
   /* ---------------------- Add member handler ---------------------------- */
 
   const handleAdd = async () => {
-    if (!orgId) return
+    if (!orgId || !userEmail) return
     if (!addForm.email.trim() || !addForm.displayName.trim()) {
       toast.error('Preencha todos os campos obrigatorios')
       return
@@ -168,25 +168,32 @@ export default function UsuariosPage() {
 
     setAddLoading(true)
     try {
-      const preset = ROLE_PRESETS[addForm.role]
-      const memberId = crypto.randomUUID()
-      const newMember: Omit<OrgMember, 'id'> = {
-        userId: '',
-        email: addForm.email.trim().toLowerCase(),
-        displayName: addForm.displayName.trim(),
-        role: addForm.role,
-        permissions: { ...preset },
-        status: 'invited',
-        joinedAt: new Date().toISOString(),
-        invitedBy: userUid || undefined,
+      const res = await fetch('/api/admin/members/invite', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-user-email': userEmail,
+        },
+        body: JSON.stringify({
+          orgId,
+          email: addForm.email.trim(),
+          displayName: addForm.displayName.trim(),
+          role: addForm.role,
+        }),
+      })
+
+      if (!res.ok) {
+        const data = await res.json()
+        throw new Error(data.error || 'Erro ao convidar membro')
       }
-      await setDoc(doc(db, 'organizations', orgId, 'members', memberId), newMember)
-      toast.success(`Convite enviado para ${addForm.email.trim()}`)
+
+      toast.success(`Convite enviado para ${addForm.email.trim()} com credenciais de acesso`)
       setAddForm({ email: '', displayName: '', role: 'seller' })
       setShowAddModal(false)
-    } catch (error) {
+    } catch (error: unknown) {
       console.error('Error adding member:', error)
-      toast.error('Erro ao adicionar membro')
+      const message = error instanceof Error ? error.message : 'Erro ao adicionar membro'
+      toast.error(message)
     } finally {
       setAddLoading(false)
     }

@@ -3,6 +3,7 @@ export interface Organization {
   name: string
   slug: string // unique, URL-friendly
   plan: 'basic' | 'standard' | 'pro'
+  adminEmail?: string
   logoUrl?: string
   settings: OrgSettings
   limits: OrgLimits

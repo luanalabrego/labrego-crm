@@ -128,9 +128,10 @@ interface AgentWizardProps {
   orgId: string
   initialAnswers?: AgentWizardAnswers
   existingKnowledge?: CallAgentKnowledge
+  onKnowledgeUpdate?: (updatedKnowledge: Partial<CallAgentKnowledge>) => void
 }
 
-export default function AgentWizard({ orgId, initialAnswers, existingKnowledge }: AgentWizardProps) {
+export default function AgentWizard({ orgId, initialAnswers, existingKnowledge, onKnowledgeUpdate }: AgentWizardProps) {
   const [answers, setAnswers] = useState<AgentWizardAnswers>(initialAnswers || EMPTY_WIZARD_ANSWERS)
   const [currentPhase, setCurrentPhase] = useState(1)
   const [saving, setSaving] = useState(false)
@@ -138,6 +139,9 @@ export default function AgentWizard({ orgId, initialAnswers, existingKnowledge }
   const [saveSuccess, setSaveSuccess] = useState(false)
   const [advancedMode, setAdvancedMode] = useState(false)
   const [advancedPrompt, setAdvancedPrompt] = useState('')
+  const [customPrompt, setCustomPrompt] = useState<string | undefined>(
+    existingKnowledge?.wizardAnswers?.manuallyEdited ? existingKnowledge?.systemPrompt : undefined
+  )
 
   // Check if user has existing config but no wizard answers (migration candidate)
   const showMigrationBanner = !initialAnswers && !!existingKnowledge && !!(
@@ -253,13 +257,17 @@ export default function AgentWizard({ orgId, initialAnswers, existingKnowledge }
     try {
       const prompt = advancedMode ? advancedPrompt : assemblePromptFromWizard(answers)
       const strength = calculateAgentStrength(answers)
+      const isManual = advancedMode
       const updatedAnswers: AgentWizardAnswers = {
         ...answers,
         strengthScore: strength,
         completedPhases: getCompletedPhases(),
         lastUpdated: new Date().toISOString(),
-        manuallyEdited: advancedMode ? true : (answers.manuallyEdited ?? false),
+        manuallyEdited: isManual,
       }
+
+      // Track custom prompt locally
+      setCustomPrompt(isManual ? prompt : undefined)
 
       const configRef = doc(db, 'callRoutingConfig', orgId)
       await updateDoc(configRef, {
@@ -277,12 +285,55 @@ export default function AgentWizard({ orgId, initialAnswers, existingKnowledge }
       setAnswers(updatedAnswers)
       setSaveSuccess(true)
       setTimeout(() => setSaveSuccess(false), 3000)
+
+      // Propagate to parent state
+      onKnowledgeUpdate?.({
+        wizardAnswers: updatedAnswers,
+        systemPrompt: prompt,
+        agentName: answers.agentName,
+        agentRole: answers.agentRole,
+        companyName: answers.companyName,
+        productsServices: answers.whatYouSell,
+        targetAudience: answers.idealCustomer,
+        valueProposition: answers.valueProposition,
+        competitiveDifferentials: answers.differentials,
+      })
     } catch (error) {
       console.error('Error saving agent:', error)
     } finally {
       setSaving(false)
     }
-  }, [orgId, answers, getCompletedPhases])
+  }, [orgId, answers, advancedMode, advancedPrompt, getCompletedPhases, onKnowledgeUpdate])
+
+  // Save edited prompt directly from PromptPreview drawer
+  const handleSaveEditedPrompt = useCallback(async (editedPrompt: string) => {
+    if (!orgId) return
+    try {
+      const updatedAnswers: AgentWizardAnswers = {
+        ...answers,
+        lastUpdated: new Date().toISOString(),
+        manuallyEdited: true,
+      }
+
+      const configRef = doc(db, 'callRoutingConfig', orgId)
+      await updateDoc(configRef, {
+        'agentKnowledge.wizardAnswers': updatedAnswers,
+        'agentKnowledge.systemPrompt': editedPrompt,
+      })
+
+      setAnswers(updatedAnswers)
+      setCustomPrompt(editedPrompt)
+
+      // Propagate to parent state
+      onKnowledgeUpdate?.({
+        wizardAnswers: updatedAnswers,
+        systemPrompt: editedPrompt,
+      })
+    } catch (error) {
+      console.error('Error saving edited prompt:', error)
+      throw error
+    }
+  }, [orgId, answers, onKnowledgeUpdate])
 
   const currentConfig = PHASES.find(p => p.number === currentPhase)
 
@@ -455,6 +506,8 @@ export default function AgentWizard({ orgId, initialAnswers, existingKnowledge }
         answers={answers}
         open={previewOpen}
         onClose={() => setPreviewOpen(false)}
+        onSave={handleSaveEditedPrompt}
+        savedCustomPrompt={customPrompt}
       />
     </div>
   )

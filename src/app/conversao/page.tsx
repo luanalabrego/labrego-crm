@@ -8,6 +8,7 @@ import {
   query,
   orderBy,
   where,
+  getDocs,
 } from 'firebase/firestore'
 import { useCrmUser } from '@/contexts/CrmUserContext'
 import { db } from '@/lib/firebaseClient'
@@ -301,38 +302,49 @@ export default function ConversaoPage() {
   }, [orgId])
 
   useEffect(() => {
-    const logsQuery = query(collectionGroup(db, 'logs'), orderBy('createdAt', 'desc'))
-    const unsub = onSnapshot(logsQuery, (snap) => {
-      const logs: MovementLog[] = []
-      snap.docs.forEach((doc) => {
-        const data = doc.data()
-        if (data.fromStageName && data.toStageName) {
-          logs.push({
-            id: doc.id,
-            clientId: doc.ref.parent.parent?.id || '',
-            text: data.message || data.text || `Card movido de ${data.fromStageName} para ${data.toStageName}`,
-            author: data.author || 'Sistema',
-            createdAt: data.createdAt,
-            fromStage: data.fromStageName,
-            toStage: data.toStageName,
-          })
-        } else if (data.text && (data.text.includes('movido de') || data.text.includes('Movido em massa'))) {
-          const parsed = parseMovementLog(data.text)
-          if (parsed) {
-            logs.push({ id: doc.id, clientId: doc.ref.parent.parent?.id || '', text: data.text, author: data.author || 'Sistema', createdAt: data.createdAt, fromStage: parsed.from, toStage: parsed.to })
+    if (!orgId) return
+    let logsUnsub: (() => void) | undefined
+
+    // Load org client IDs to filter cross-org data from collectionGroup
+    getDocs(query(collection(db, 'clients'), where('orgId', '==', orgId))).then(clientsSnap => {
+      const orgClientIds = new Set(clientsSnap.docs.map(d => d.id))
+
+      const logsQuery = query(collectionGroup(db, 'logs'), orderBy('createdAt', 'desc'))
+      logsUnsub = onSnapshot(logsQuery, (snap) => {
+        const logs: MovementLog[] = []
+        snap.docs.forEach((doc) => {
+          const data = doc.data()
+          const clientId = doc.ref.parent.parent?.id || ''
+          if (!orgClientIds.has(clientId)) return // Skip clients from other orgs
+          if (data.fromStageName && data.toStageName) {
+            logs.push({
+              id: doc.id,
+              clientId,
+              text: data.message || data.text || `Card movido de ${data.fromStageName} para ${data.toStageName}`,
+              author: data.author || 'Sistema',
+              createdAt: data.createdAt,
+              fromStage: data.fromStageName,
+              toStage: data.toStageName,
+            })
+          } else if (data.text && (data.text.includes('movido de') || data.text.includes('Movido em massa'))) {
+            const parsed = parseMovementLog(data.text)
+            if (parsed) {
+              logs.push({ id: doc.id, clientId, text: data.text, author: data.author || 'Sistema', createdAt: data.createdAt, fromStage: parsed.from, toStage: parsed.to })
+            }
+          } else if (data.message && (data.message.includes('movido de') || data.message.includes('Movido em massa'))) {
+            const parsed = parseMovementLog(data.message)
+            if (parsed) {
+              logs.push({ id: doc.id, clientId, text: data.message, author: data.author || 'Sistema', createdAt: data.createdAt, fromStage: parsed.from, toStage: parsed.to })
+            }
           }
-        } else if (data.message && (data.message.includes('movido de') || data.message.includes('Movido em massa'))) {
-          const parsed = parseMovementLog(data.message)
-          if (parsed) {
-            logs.push({ id: doc.id, clientId: doc.ref.parent.parent?.id || '', text: data.message, author: data.author || 'Sistema', createdAt: data.createdAt, fromStage: parsed.from, toStage: parsed.to })
-          }
-        }
+        })
+        setMovementLogs(logs)
+        setLoading(false)
       })
-      setMovementLogs(logs)
-      setLoading(false)
     })
-    return () => unsub()
-  }, [])
+
+    return () => { if (logsUnsub) logsUnsub() }
+  }, [orgId])
 
   useEffect(() => {
     if (!orgId) return

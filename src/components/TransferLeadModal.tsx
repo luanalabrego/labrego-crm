@@ -86,6 +86,7 @@ export default function TransferLeadModal({
         type: 'audit',
         author: authorName,
         authorId: member?.id || auth.currentUser?.uid || '',
+        orgId,
         metadata: {
           fromMemberId: currentAssignedTo || '',
           toMemberId: toMember.id,

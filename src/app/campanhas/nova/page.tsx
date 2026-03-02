@@ -16,7 +16,10 @@ import {
   doc,
 } from 'firebase/firestore'
 import PlanGate from '@/components/PlanGate'
+import dynamic from 'next/dynamic'
 import { toast } from 'sonner'
+
+const RichTextEditor = dynamic(() => import('@/components/RichTextEditor'), { ssr: false })
 import { formatDate } from '@/lib/format'
 import { leadSourceOptions, leadTypeOptions } from '@/lib/leadSources'
 import {
@@ -1028,15 +1031,13 @@ function NovasCampanhasContent() {
 
             {!showPreview ? (
               <div>
-                <textarea
+                <RichTextEditor
                   value={body}
-                  onChange={(e) => setBody(e.target.value)}
-                  placeholder="Escreva o corpo do email aqui...&#10;&#10;Use variáveis como {{nome}} e {{empresa}} para personalizar."
-                  rows={12}
-                  className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm focus:border-primary-500 focus:ring-1 focus:ring-primary-500 outline-none font-mono"
+                  onChange={(html) => setBody(html)}
+                  placeholder="Escreva o corpo do email aqui... Use variáveis como {{nome}} e {{empresa}} para personalizar."
                 />
                 <p className="text-xs text-slate-400 mt-1">
-                  Suporte a HTML. Variáveis serão substituídas para cada destinatário.
+                  Use a toolbar para formatar. Variáveis serão substituídas para cada destinatário.
                 </p>
               </div>
             ) : (
