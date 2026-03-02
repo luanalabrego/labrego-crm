@@ -24,7 +24,7 @@ export async function POST(request: NextRequest) {
 
   const db = getAdminDb()
   const now = new Date()
-  const results = { processed: 0, success: 0, failed: 0, skipped: 0 }
+  const results = { enrolled: 0, processed: 0, success: 0, failed: 0, skipped: 0 }
 
   try {
     // Get all organizations
@@ -52,6 +52,10 @@ export async function POST(request: NextRequest) {
         }
 
         const remaining = config.maxActionsPerDay - todayCount
+
+        // Auto-enroll contacts in stages with cadence steps
+        await enrollUnenrolledContacts(db, orgId, config.pausedStageIds, results)
+
         await processOrg(db, orgId, config.pausedStageIds, remaining, results)
       } catch (orgError) {
         console.error(`Cadence error for org ${orgId}:`, orgError)
@@ -73,6 +77,74 @@ export async function POST(request: NextRequest) {
       { error: 'Failed to process cadences', details },
       { status: 500 }
     )
+  }
+}
+
+/**
+ * Auto-enroll contacts that are in stages with cadence steps but not yet enrolled.
+ * Runs before processing to ensure new contacts get picked up.
+ */
+async function enrollUnenrolledContacts(
+  db: FirebaseFirestore.Firestore,
+  orgId: string,
+  pausedStageIds: string[],
+  results: { enrolled: number }
+) {
+  // Get all active cadence steps for this org
+  const stepsSnap = await db.collection('cadenceSteps')
+    .where('orgId', '==', orgId)
+    .where('isActive', '==', true)
+    .get()
+
+  if (stepsSnap.empty) return
+
+  const steps = stepsSnap.docs.map(d => ({ id: d.id, ...d.data() } as CadenceStep))
+
+  // Find first step per stage (lowest order)
+  const stageFirstSteps = new Map<string, CadenceStep>()
+  for (const step of steps) {
+    if (pausedStageIds.includes(step.stageId)) continue
+    // Only consider root steps (no parentStepId)
+    if (step.parentStepId) continue
+    const existing = stageFirstSteps.get(step.stageId)
+    if (!existing || step.order < existing.order) {
+      stageFirstSteps.set(step.stageId, step)
+    }
+  }
+
+  const now = new Date().toISOString()
+
+  for (const [stageId, firstStep] of stageFirstSteps) {
+    // Get contacts in this stage (limit per cron run to avoid overload)
+    const contactsSnap = await db.collection('clients')
+      .where('orgId', '==', orgId)
+      .where('funnelStage', '==', stageId)
+      .limit(500)
+      .get()
+
+    // Filter unenrolled contacts (no currentCadenceStepId)
+    const unenrolled = contactsSnap.docs.filter(d => {
+      const data = d.data()
+      return !data.currentCadenceStepId
+    })
+
+    if (unenrolled.length === 0) continue
+
+    // Enroll in batches of 500
+    for (let i = 0; i < unenrolled.length; i += 500) {
+      const batch = db.batch()
+      const chunk = unenrolled.slice(i, i + 500)
+      for (const contactDoc of chunk) {
+        batch.update(contactDoc.ref, {
+          currentCadenceStepId: firstStep.id,
+          lastCadenceActionAt: now,
+          lastCadenceStepResponded: false,
+        })
+      }
+      await batch.commit()
+    }
+
+    results.enrolled += unenrolled.length
   }
 }
 

@@ -245,6 +245,9 @@ export default function ContatosPage() {
   const [importProgress, setImportProgress] = useState<{ current: number; total: number } | null>(null)
   const { funnels } = useVisibleFunnels()
 
+  // Cadence steps for auto-enrollment
+  const [cadenceSteps, setCadenceSteps] = useState<Array<{ id: string; stageId: string; order: number; isActive: boolean; parentStepId?: string | null }>>([])
+
   const importStagesForFunnel = useMemo(() => {
     if (!importFunnelId) return []
     return funnelStages.filter(s => s.funnelId === importFunnelId)
@@ -290,10 +293,17 @@ export default function ContatosPage() {
       setCostCenters(data.sort((a, b) => a.code - b.code))
     })
 
+    // Load cadence steps for auto-enrollment on bulk move
+    const unsubCadence = onSnapshot(query(collection(db, 'cadenceSteps'), where('orgId', '==', orgId)), (snap) => {
+      const data = snap.docs.map((d) => ({ id: d.id, stageId: d.data().stageId, order: d.data().order, isActive: d.data().isActive, parentStepId: d.data().parentStepId }))
+      setCadenceSteps(data)
+    })
+
     return () => {
       unsubClients()
       unsubStages()
       unsubCostCenters()
+      unsubCadence()
     }
   }, [orgId])
 
@@ -1155,17 +1165,32 @@ export default function ContatosPage() {
     try {
       const ids = Array.from(selectedIds)
       const chunkSize = 250
+      const now = new Date().toISOString()
+
+      // Find first cadence step for the target stage
+      const targetStageSteps = cadenceSteps
+        .filter(s => s.stageId === bulkStageId && s.isActive && !s.parentStepId)
+        .sort((a, b) => a.order - b.order)
+      const firstCadenceStep = targetStageSteps[0] || null
+
       for (let i = 0; i < ids.length; i += chunkSize) {
         const chunk = ids.slice(i, i + chunkSize)
         const batch = writeBatch(db)
         for (const id of chunk) {
           const clientRef = doc(db, 'clients', id)
-          batch.update(clientRef, {
+          const updateData: Record<string, unknown> = {
             funnelId: bulkFunnelId,
             funnelStage: bulkStageId,
-            funnelStageUpdatedAt: new Date().toISOString(),
-            updatedAt: new Date().toISOString(),
-          })
+            funnelStageUpdatedAt: now,
+            updatedAt: now,
+          }
+          // Auto-enroll in cadence
+          if (firstCadenceStep) {
+            updateData.currentCadenceStepId = firstCadenceStep.id
+            updateData.lastCadenceActionAt = now
+            updateData.lastCadenceStepResponded = false
+          }
+          batch.update(clientRef, updateData)
         }
         await batch.commit()
       }

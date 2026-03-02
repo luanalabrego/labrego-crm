@@ -1624,6 +1624,22 @@ export default function FunilDetailPage() {
         }
       }
 
+      // Auto-enroll in cadence if target stage has cadence steps
+      if (newStageId) {
+        const stageSteps = cadenceSteps
+          .filter(s => s.stageId === newStageId && s.isActive && !s.parentStepId)
+          .sort((a, b) => a.order - b.order)
+        if (stageSteps.length > 0) {
+          updateData.currentCadenceStepId = stageSteps[0].id
+          updateData.lastCadenceActionAt = now
+          updateData.lastCadenceStepResponded = false
+        } else {
+          // Clear cadence if target stage has no steps
+          updateData.currentCadenceStepId = ''
+          updateData.lastCadenceStepResponded = false
+        }
+      }
+
       await updateDoc(doc(db, 'clients', draggableId), updateData as any)
 
       // Create audit log for stage change
@@ -2247,12 +2263,29 @@ export default function FunilDetailPage() {
   // Quick stage change from table
   const handleQuickStageChange = async (clientId: string, newStageId: string | null) => {
     try {
-      await updateDoc(doc(db, 'clients', clientId), {
+      const now = new Date().toISOString()
+      const updateData: Record<string, unknown> = {
         funnelStage: newStageId,
         funnelId: newStageId ? funnelId : '',
-        funnelStageUpdatedAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      })
+        funnelStageUpdatedAt: now,
+        updatedAt: now,
+      }
+
+      // Auto-enroll in cadence if target stage has cadence steps
+      if (newStageId) {
+        const stageSteps = cadenceSteps
+          .filter(s => s.stageId === newStageId && s.isActive && !s.parentStepId)
+          .sort((a, b) => a.order - b.order)
+        if (stageSteps.length > 0) {
+          updateData.currentCadenceStepId = stageSteps[0].id
+          updateData.lastCadenceActionAt = now
+          updateData.lastCadenceStepResponded = false
+        } else {
+          updateData.currentCadenceStepId = ''
+        }
+      }
+
+      await updateDoc(doc(db, 'clients', clientId), updateData as any)
       setChangingStageClient(null)
     } catch (error) {
       console.error('Error changing stage:', error)
@@ -2486,15 +2519,30 @@ export default function FunilDetailPage() {
     const fromStageName = funnelStages.find(s => s.id === bulkMoveFromStage)?.name || 'Etapa anterior'
 
     try {
+      // Find first cadence step for the target stage
+      const targetStageSteps = cadenceSteps
+        .filter(s => s.stageId === bulkMoveToStage && s.isActive && !s.parentStepId)
+        .sort((a, b) => a.order - b.order)
+      const firstCadenceStep = targetStageSteps[0] || null
+
       // Update all filtered clients
       const updatePromises = bulkMoveFilteredClients.map(async (client) => {
-        // Update client stage
-        await updateDoc(doc(db, 'clients', client.id), {
+        const updateData: Record<string, unknown> = {
           funnelStage: bulkMoveToStage,
           funnelId,
           funnelStageUpdatedAt: now,
           updatedAt: now,
-        })
+        }
+        // Auto-enroll in cadence
+        if (firstCadenceStep) {
+          updateData.currentCadenceStepId = firstCadenceStep.id
+          updateData.lastCadenceActionAt = now
+          updateData.lastCadenceStepResponded = false
+        } else {
+          updateData.currentCadenceStepId = ''
+        }
+        // Update client stage
+        await updateDoc(doc(db, 'clients', client.id), updateData as any)
 
         // Add log entry
         await addDoc(collection(db, 'clients', client.id, 'logs'), {
