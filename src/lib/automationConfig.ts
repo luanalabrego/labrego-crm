@@ -40,11 +40,17 @@ export async function getTodayActionCount(orgId: string): Promise<number> {
   today.setHours(0, 0, 0, 0)
   const todayStr = today.toISOString()
 
-  const snap = await db
-    .collection('organizations').doc(orgId).collection('cadenceExecutionLog')
-    .where('executedAt', '>=', todayStr)
-    .where('status', 'in', ['success', 'failed'])
-    .get()
+  try {
+    const snap = await db
+      .collection('organizations').doc(orgId).collection('cadenceExecutionLog')
+      .where('executedAt', '>=', todayStr)
+      .where('status', 'in', ['success', 'failed'])
+      .get()
 
-  return snap.size
+    return snap.size
+  } catch (error) {
+    // Index might not exist yet — allow execution with count 0
+    console.warn(`getTodayActionCount failed for org ${orgId}, assuming 0:`, error instanceof Error ? error.message : error)
+    return 0
+  }
 }
