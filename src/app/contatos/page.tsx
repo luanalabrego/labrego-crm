@@ -682,9 +682,10 @@ export default function ContatosPage() {
   const filteredClients = useMemo(() => {
     let result = [...clients]
 
-    // Quick funnel filter
+    // Quick funnel filter — includes contacts with no stage or orphaned stage IDs
     if (quickFunnelFilter === 'no-funnel') {
-      result = result.filter(c => !c.funnelStage)
+      const validStageIds = new Set(funnelStages.map(s => s.id))
+      result = result.filter(c => !c.funnelStage || !validStageIds.has(c.funnelStage))
     }
 
     // Apply column filters
@@ -728,7 +729,7 @@ export default function ContatosPage() {
     }
 
     return result
-  }, [clients, columnFilters, sortConfig, getStageName, quickFunnelFilter])
+  }, [clients, columnFilters, sortConfig, getStageName, quickFunnelFilter, funnelStages])
 
   // Export contacts to CSV
   const handleExport = useCallback(() => {
