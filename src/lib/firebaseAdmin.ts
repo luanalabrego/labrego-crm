@@ -45,6 +45,7 @@ export function getAdminDb(): FirebaseFirestore.Firestore {
   if (db) return db
   initAdmin()
   db = admin.firestore()
+  db.settings({ ignoreUndefinedProperties: true })
   return db
 }
 
