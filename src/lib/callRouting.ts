@@ -494,7 +494,10 @@ export async function makeVapiCall(prospect: {
   industry?: string
   partners?: string
   phoneIndex?: number // índice do telefone a usar (para multi-phone)
-}, orgId?: string): Promise<{ id: string; status: string }> {
+}, orgId?: string, cadenceOverrides?: {
+  systemPrompt?: string
+  firstMessage?: string
+}): Promise<{ id: string; status: string }> {
   if (!VAPI_API_KEY) {
     throw new Error('VAPI_API_KEY não configurada')
   }
@@ -565,14 +568,18 @@ export async function makeVapiCall(prospect: {
     },
   }
 
+  // Cadence overrides have priority over global config
+  const finalFirstMessage = cadenceOverrides?.firstMessage || customFirstMessage
+  const finalSystemPrompt = cadenceOverrides?.systemPrompt || customSystemPrompt
+
   // Adicionar firstMessage customizado se existir
-  if (customFirstMessage) {
-    assistantOverrides.firstMessage = customFirstMessage
-    console.log('[VAPI-CALL] Using custom firstMessage from CRM')
+  if (finalFirstMessage) {
+    assistantOverrides.firstMessage = finalFirstMessage
+    console.log(`[VAPI-CALL] Using ${cadenceOverrides?.firstMessage ? 'cadence step' : 'CRM config'} firstMessage`)
   }
 
   // Adicionar systemPrompt customizado se existir
-  if (customSystemPrompt) {
+  if (finalSystemPrompt) {
     // Determinar o provider baseado no nome do modelo
     const llmModel = config.voiceAgent.llmModel || 'gpt-4o'
     let provider = 'openai'
@@ -592,11 +599,11 @@ export async function makeVapiCall(prospect: {
       messages: [
         {
           role: 'system',
-          content: customSystemPrompt,
+          content: finalSystemPrompt,
         },
       ],
     }
-    console.log(`[VAPI-CALL] Using custom systemPrompt from CRM (provider: ${provider}, model: ${llmModel})`)
+    console.log(`[VAPI-CALL] Using ${cadenceOverrides?.systemPrompt ? 'cadence step' : 'CRM config'} systemPrompt (provider: ${provider}, model: ${llmModel})`)
   }
 
   // Adicionar mensagem de despedida se existir

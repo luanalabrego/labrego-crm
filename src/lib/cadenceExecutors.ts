@@ -38,13 +38,21 @@ async function executePhoneStep(step: CadenceStep, contact: Contact, orgId?: str
   if (!phone) return { success: false, error: 'Contato sem telefone' }
 
   try {
+    // Pass cadence step overrides for system prompt and first message
+    const cadenceOverrides = (step.vapiSystemPrompt || step.vapiFirstMessage)
+      ? {
+          systemPrompt: step.vapiSystemPrompt || undefined,
+          firstMessage: step.vapiFirstMessage || undefined,
+        }
+      : undefined
+
     await makeVapiCall({
       id: contact.id,
       name: (contact.name as string) || '',
       phone,
       company: (contact.company as string) || undefined,
       industry: (contact.industry as string) || undefined,
-    }, orgId)
+    }, orgId, cadenceOverrides)
     return { success: true }
   } catch (err) {
     return { success: false, error: err instanceof Error ? err.message : 'Erro na ligação VAPI' }
