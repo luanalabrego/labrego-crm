@@ -550,7 +550,7 @@ export async function makeVapiCall(prospect: {
     variableValues: {
       greeting,
       todayDate,
-      prospectName: firstName,
+      prospectName: contactName,
       contactName,
       prospectCompany: prospect.company || 'sua empresa',
       prospectIndustry: prospect.industry || 'seu setor',
