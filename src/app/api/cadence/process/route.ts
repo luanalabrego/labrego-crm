@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getAdminDb } from '@/lib/firebaseAdmin'
-import { getAutomationConfig, getTodayActionCount } from '@/lib/automationConfig'
+import { getAutomationConfig, getTodayActionCount, getTodayPhoneCallCount } from '@/lib/automationConfig'
 import { executeCadenceStep, logCadenceExecution, determineBestStage } from '@/lib/cadenceExecutors'
-import type { CadenceStep, CadenceExecutionLog } from '@/types/cadence'
+import { createCadenceCallQueue, getCallQueue, processQueue } from '@/lib/callQueue'
+import type { CadenceStep, CadenceExecutionLog, AutomationConfig } from '@/types/cadence'
 
 const BATCH_SIZE = 20
 const BATCH_DELAY_MS = 5000
@@ -56,7 +57,7 @@ export async function POST(request: NextRequest) {
         // Auto-enroll contacts in stages with cadence steps
         await enrollUnenrolledContacts(db, orgId, config.pausedStageIds, results)
 
-        await processOrg(db, orgId, config.pausedStageIds, remaining, results)
+        await processOrg(db, orgId, config, remaining, results)
       } catch (orgError) {
         console.error(`Cadence error for org ${orgId}:`, orgError)
         results.failed++
@@ -153,10 +154,11 @@ async function enrollUnenrolledContacts(
 async function processOrg(
   db: FirebaseFirestore.Firestore,
   orgId: string,
-  pausedStageIds: string[],
+  config: AutomationConfig,
   maxActions: number,
   results: { processed: number; success: number; failed: number; skipped: number }
 ) {
+  const pausedStageIds = config.pausedStageIds
   const now = new Date()
   let actionsLeft = maxActions
 
@@ -244,9 +246,124 @@ async function processOrg(
     eligible.push({ contact, step, stage })
   }
 
-  // Process in batches
-  for (let i = 0; i < eligible.length && actionsLeft > 0; i += BATCH_SIZE) {
-    const batch = eligible.slice(i, i + BATCH_SIZE)
+  // ---- SEPARATE PHONE vs NON-PHONE ----
+  const phoneEligible = eligible.filter(e => e.step.contactMethod === 'phone')
+  const nonPhoneEligible = eligible.filter(e => e.step.contactMethod !== 'phone')
+
+  // ---- PHONE: Power Dialer via CallQueue ----
+  if (phoneEligible.length > 0) {
+    // Check if a cadence queue is already running for this org
+    const existingQueue = await getCallQueue(undefined, orgId)
+    const hasCadenceQueue = existingQueue && existingQueue.status === 'running' &&
+      (existingQueue as unknown as Record<string, unknown>).type === 'cadence'
+
+    if (hasCadenceQueue) {
+      console.log(`[CADENCE] Cadence queue already running for org ${orgId}, skipping phone enqueue`)
+      results.skipped += phoneEligible.length
+    } else {
+      // Calculate daily phone budget
+      const todayPhoneCount = await getTodayPhoneCallCount(orgId)
+      const maxPhoneDaily = config.maxCallsPerDay ?? 300
+      const phoneBudget = Math.max(0, maxPhoneDaily - todayPhoneCount)
+
+      if (phoneBudget === 0) {
+        console.log(`[CADENCE] Daily phone limit reached (${todayPhoneCount}/${maxPhoneDaily}), skipping phone steps`)
+        results.skipped += phoneEligible.length
+      } else {
+        // Limit to daily budget
+        const phonesToEnqueue = phoneEligible.slice(0, Math.min(phoneBudget, actionsLeft))
+        const skippedCount = phoneEligible.length - phonesToEnqueue.length
+
+        // Build contacts for queue
+        const queueContacts = phonesToEnqueue.map(({ contact, step }) => {
+          const cadenceOverrides = (step.vapiSystemPrompt || step.vapiFirstMessage)
+            ? {
+                systemPrompt: step.vapiSystemPrompt || undefined,
+                firstMessage: step.vapiFirstMessage || undefined,
+              }
+            : undefined
+
+          return {
+            id: contact.id,
+            name: (contact.name as string) || '',
+            phone: (contact.phone as string) || '',
+            company: (contact.company as string) || undefined,
+            industry: (contact.industry as string) || undefined,
+            partners: (contact.partners as string) || undefined,
+            cadenceStepId: step.id,
+            cadenceOverrides,
+          }
+        })
+
+        // Create queue and start processing
+        const maxConcurrent = config.maxConcurrentCalls ?? 10
+        const { queueId, totalItems } = await createCadenceCallQueue({
+          contacts: queueContacts,
+          maxConcurrent,
+          orgId,
+        })
+
+        // Mark all enqueued contacts as pending call result
+        const nowStr = new Date().toISOString()
+        for (let i = 0; i < phonesToEnqueue.length; i += 450) {
+          const writeBatch = db.batch()
+          const chunk = phonesToEnqueue.slice(i, i + 450)
+          for (const { contact } of chunk) {
+            writeBatch.update(db.collection('clients').doc(contact.id), {
+              cadencePendingCallResult: true,
+              lastCadenceActionAt: nowStr,
+            })
+          }
+          await writeBatch.commit()
+        }
+
+        // Log cadence executions for enqueued contacts
+        for (const { contact, step, stage } of phonesToEnqueue) {
+          await logCadenceExecution(db, orgId, contact.id, {
+            stepId: step.id,
+            stepName: step.name,
+            channel: 'phone',
+            stageId: stage.id,
+            stageName: stage.name,
+            success: true,
+            error: '',
+            templatePreview: step.name.slice(0, 100),
+          })
+
+          const logEntry: Omit<CadenceExecutionLog, 'id'> = {
+            orgId,
+            clientId: contact.id,
+            clientName: (contact.name as string) || '',
+            stepId: step.id,
+            stepName: step.name,
+            stageId: stage.id,
+            stageName: stage.name,
+            channel: 'phone',
+            status: 'success',
+            error: '',
+            executedAt: now.toISOString(),
+            retryCount: 0,
+          }
+          await db.collection('organizations').doc(orgId).collection('cadenceExecutionLog').add(logEntry)
+        }
+
+        results.processed += totalItems
+        results.success += totalItems
+        actionsLeft -= totalItems
+        results.skipped += skippedCount
+
+        // Start the power dialer — fills maxConcurrent slots immediately
+        // Subsequent calls are triggered by webhook → onCallCompleted → processQueue
+        await processQueue(queueId)
+
+        console.log(`[CADENCE] Power dialer started: queue ${queueId} with ${totalItems} contacts, ${maxConcurrent} concurrent, ${skippedCount} deferred`)
+      }
+    }
+  }
+
+  // ---- NON-PHONE: Process normally in batches ----
+  for (let i = 0; i < nonPhoneEligible.length && actionsLeft > 0; i += BATCH_SIZE) {
+    const batch = nonPhoneEligible.slice(i, i + BATCH_SIZE)
 
     for (const { contact, step, stage } of batch) {
       if (actionsLeft <= 0) break
@@ -271,7 +388,6 @@ async function processOrg(
         templatePreview: (step.messageTemplate || step.emailSubject || step.name).slice(0, 100),
       })
 
-      // Create execution log entry
       const logEntry: Omit<CadenceExecutionLog, 'id'> = {
         orgId,
         clientId: contact.id,
@@ -290,26 +406,15 @@ async function processOrg(
 
       if (result.success) {
         results.success++
-        if (step.contactMethod === 'phone') {
-          // Phone steps: wait for webhook result before advancing
-          await db.collection('clients').doc(contact.id).update({
-            cadencePendingCallResult: true,
-            lastCadenceActionAt: new Date().toISOString(),
-          })
-          console.log(`[CADENCE] Phone step executed for ${contact.id}, waiting for webhook result`)
-        } else {
-          // Non-phone steps: advance immediately
-          await advanceToNextStep(db, orgId, contact, step, steps, stageMap)
-        }
+        await advanceToNextStep(db, orgId, contact, step, steps, stageMap)
       } else {
         results.failed++
-        // Handle retry
         await handleFailedStep(db, orgId, contact, step, logEntry, steps, stageMap)
       }
     }
 
     // Delay between batches
-    if (i + BATCH_SIZE < eligible.length) {
+    if (i + BATCH_SIZE < nonPhoneEligible.length) {
       await new Promise(resolve => setTimeout(resolve, BATCH_DELAY_MS))
     }
   }

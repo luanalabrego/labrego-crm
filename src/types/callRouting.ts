@@ -521,6 +521,7 @@ export interface CallQueueItem {
   phone: string
   company?: string
   industry?: string
+  partners?: string
   status: CallQueueItemStatus
   vapiCallId?: string
   outcome?: CallOutcomeCode
@@ -532,6 +533,12 @@ export interface CallQueueItem {
   updatedAt: string
   startedAt?: string
   endedAt?: string
+  // Cadence fields (populated when queue is created from cadence)
+  cadenceStepId?: string
+  cadenceOverrides?: {
+    systemPrompt?: string
+    firstMessage?: string
+  }
 }
 
 export type CallQueueStatus = 'idle' | 'running' | 'paused' | 'completed' | 'cancelled'
@@ -539,6 +546,7 @@ export type CallQueueStatus = 'idle' | 'running' | 'paused' | 'completed' | 'can
 export interface CallQueue {
   id: string
   status: CallQueueStatus
+  type?: 'manual' | 'cadence'
   maxConcurrent: number // máximo de ligações simultâneas (default 10)
   totalItems: number
   completedItems: number

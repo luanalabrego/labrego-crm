@@ -101,6 +101,83 @@ export async function createCallQueue(options: {
 }
 
 /**
+ * Cria uma fila de ligações para contatos da cadência.
+ * Aceita uma lista de contatos já filtrados com metadata de cadência.
+ */
+export async function createCadenceCallQueue(options: {
+  contacts: Array<{
+    id: string
+    name: string
+    phone: string
+    company?: string
+    industry?: string
+    partners?: string
+    cadenceStepId: string
+    cadenceOverrides?: { systemPrompt?: string; firstMessage?: string }
+  }>
+  maxConcurrent?: number
+  orgId: string
+}): Promise<{ queueId: string; totalItems: number }> {
+  const db = getAdminDb()
+  const maxConcurrent = options.maxConcurrent || DEFAULT_MAX_CONCURRENT
+
+  if (options.contacts.length === 0) {
+    throw new Error('Nenhum contato para enfileirar')
+  }
+
+  const now = new Date().toISOString()
+  const queueRef = db.collection(COLLECTION_QUEUE).doc()
+  const queueId = queueRef.id
+
+  const queue: Omit<CallQueue, 'id'> & { orgId: string } = {
+    status: 'running',
+    type: 'cadence',
+    maxConcurrent,
+    totalItems: options.contacts.length,
+    completedItems: 0,
+    failedItems: 0,
+    activeCallsCount: 0,
+    createdAt: now,
+    updatedAt: now,
+    orgId: options.orgId,
+  }
+
+  await queueRef.set({ ...queue, id: queueId })
+
+  // Criar itens em batches de 450
+  const batchSize = 450
+  for (let batchStart = 0; batchStart < options.contacts.length; batchStart += batchSize) {
+    const batch = db.batch()
+    const batchEnd = Math.min(batchStart + batchSize, options.contacts.length)
+    for (let i = batchStart; i < batchEnd; i++) {
+      const c = options.contacts[i]
+      const itemRef = db.collection(COLLECTION_QUEUE_ITEMS).doc()
+      const item: Omit<CallQueueItem, 'id'> = {
+        queueId,
+        clientId: c.id,
+        name: c.name,
+        phone: c.phone,
+        ...(c.company != null && { company: c.company }),
+        ...(c.industry != null && { industry: c.industry }),
+        ...(c.partners != null && { partners: c.partners }),
+        status: 'pending',
+        position: i,
+        createdAt: now,
+        updatedAt: now,
+        cadenceStepId: c.cadenceStepId,
+        ...(c.cadenceOverrides && { cadenceOverrides: c.cadenceOverrides }),
+      }
+      batch.set(itemRef, { ...item, id: itemRef.id })
+    }
+    await batch.commit()
+  }
+
+  console.log(`[CALL-QUEUE] Cadence queue ${queueId} created with ${options.contacts.length} contacts (max concurrent: ${maxConcurrent})`)
+
+  return { queueId, totalItems: options.contacts.length }
+}
+
+/**
  * Busca a fila ativa (ou uma fila específica por ID).
  * Usa query simples (single field) para evitar necessidade de composite index.
  */
@@ -252,14 +329,15 @@ export async function processQueue(queueId: string): Promise<{
         startedAt: now,
       })
 
-      // Fazer a chamada VAPI
+      // Fazer a chamada VAPI (com overrides de cadência se existirem)
       const call = await makeVapiCall({
         id: item.clientId,
         name: item.name,
         phone: item.phone,
         company: item.company,
         industry: item.industry,
-      }, orgId)
+        partners: item.partners,
+      }, orgId, item.cadenceOverrides || undefined)
 
       // Atualizar com o callId do VAPI
       await db.collection(COLLECTION_QUEUE_ITEMS).doc(item.id).update({

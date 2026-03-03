@@ -54,3 +54,25 @@ export async function getTodayActionCount(orgId: string): Promise<number> {
     return 0
   }
 }
+
+export async function getTodayPhoneCallCount(orgId: string): Promise<number> {
+  const db = getAdminDb()
+  const today = new Date()
+  today.setHours(0, 0, 0, 0)
+  const todayStr = today.toISOString()
+
+  try {
+    const snap = await db
+      .collection('organizations').doc(orgId).collection('cadenceExecutionLog')
+      .where('executedAt', '>=', todayStr)
+      .get()
+
+    return snap.docs.filter(d => {
+      const data = d.data()
+      return data.channel === 'phone' && (data.status === 'success' || data.status === 'failed')
+    }).length
+  } catch (error) {
+    console.warn(`getTodayPhoneCallCount failed for org ${orgId}, assuming 0:`, error instanceof Error ? error.message : error)
+    return 0
+  }
+}

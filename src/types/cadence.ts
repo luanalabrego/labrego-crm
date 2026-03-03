@@ -99,6 +99,8 @@ export interface AutomationConfig {
   workHoursEnd: string
   timezone: string
   maxActionsPerDay: number
+  maxConcurrentCalls: number
+  maxCallsPerDay: number
 }
 
 export const DEFAULT_AUTOMATION_CONFIG: AutomationConfig = {
@@ -108,6 +110,8 @@ export const DEFAULT_AUTOMATION_CONFIG: AutomationConfig = {
   workHoursEnd: '18:00',
   timezone: 'America/Sao_Paulo',
   maxActionsPerDay: 100,
+  maxConcurrentCalls: 10,
+  maxCallsPerDay: 300,
 }
 
 export const CONTACT_METHOD_LABELS: Record<ContactMethod, string> = {

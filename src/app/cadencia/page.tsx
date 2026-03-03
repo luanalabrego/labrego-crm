@@ -308,9 +308,25 @@ function ConfigTab({ orgId, stages, allStages, steps, setSteps, autoConfig, setA
             </div>
             <div>
               <label className="block text-xs font-medium text-slate-500 mb-1">Máx. ações/dia</label>
-              <input type="number" value={autoConfig.maxActionsPerDay} min={1} max={500}
+              <input type="number" value={autoConfig.maxActionsPerDay} min={1} max={5000}
                 onChange={e => saveAutomationConfig({ maxActionsPerDay: parseInt(e.target.value) || 100 })}
                 className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm" />
+            </div>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
+            <div>
+              <label className="block text-xs font-medium text-slate-500 mb-1">Máx. ligações simultâneas</label>
+              <input type="number" value={autoConfig.maxConcurrentCalls ?? 10} min={1} max={50}
+                onChange={e => saveAutomationConfig({ maxConcurrentCalls: parseInt(e.target.value) || 10 })}
+                className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm" />
+              <p className="text-xs text-slate-400 mt-0.5">Limite VAPI (free: 10)</p>
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-slate-500 mb-1">Máx. ligações/dia</label>
+              <input type="number" value={autoConfig.maxCallsPerDay ?? 300} min={1} max={5000}
+                onChange={e => saveAutomationConfig({ maxCallsPerDay: parseInt(e.target.value) || 300 })}
+                className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm" />
+              <p className="text-xs text-slate-400 mt-0.5">Independente do limite total de ações</p>
             </div>
           </div>
           <div className="flex items-center gap-3 pt-2">
@@ -793,7 +809,7 @@ function ExecutionTab({ orgId, stages, steps, autoConfig, setAutoConfig }: {
       </div>
 
       {/* KPI cards */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
         <div className="bg-white rounded-2xl p-5 border border-slate-100 shadow-sm">
           <p className="text-xs text-slate-500">Em cadência ativa</p>
           <p className="text-2xl font-bold text-slate-900 mt-1">{totalActive}</p>
@@ -802,6 +818,11 @@ function ExecutionTab({ orgId, stages, steps, autoConfig, setAutoConfig }: {
           <p className="text-xs text-slate-500">Ações hoje</p>
           <p className="text-2xl font-bold text-slate-900 mt-1">{successToday.length}</p>
           <p className="text-xs text-slate-400 mt-0.5">de {autoConfig.maxActionsPerDay} max</p>
+        </div>
+        <div className="bg-white rounded-2xl p-5 border border-slate-100 shadow-sm">
+          <p className="text-xs text-slate-500">Ligações hoje</p>
+          <p className="text-2xl font-bold text-blue-600 mt-1">{channelCounts['phone'] || 0}</p>
+          <p className="text-xs text-slate-400 mt-0.5">de {autoConfig.maxCallsPerDay ?? 300} max</p>
         </div>
         <div className="bg-white rounded-2xl p-5 border border-slate-100 shadow-sm">
           <p className="text-xs text-slate-500">Falhas (24h)</p>
