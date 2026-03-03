@@ -223,12 +223,19 @@ export const KanbanCard = memo(function KanbanCard({
   icpName,
   onSelect,
 }: KanbanCardProps) {
-  // Hide followup time for "Prospecção ativa" stage
-  const showFollowupTime = stageName?.toLowerCase() !== 'prospecção ativa'
-  const timeSinceContact = formatTimeSince(lastContactDate)
-  const daysSinceLastContact = (() => {
-    if (!lastContactDate) return null
-    const date = new Date(lastContactDate)
+  // Compute last activity = most recent of lastFollowUpAt and updatedAt
+  const lastActivityDate = (() => {
+    const dates = [lastContactDate, client.updatedAt].filter(Boolean) as string[]
+    if (dates.length === 0) return null
+    return dates.reduce((latest, d) => {
+      const t = new Date(d).getTime()
+      return !isNaN(t) && t > new Date(latest).getTime() ? d : latest
+    })
+  })()
+  const timeSinceActivity = formatTimeSince(lastActivityDate)
+  const daysSinceLastActivity = (() => {
+    if (!lastActivityDate) return null
+    const date = new Date(lastActivityDate)
     if (isNaN(date.getTime())) return null
     return Math.floor((Date.now() - date.getTime()) / (1000 * 60 * 60 * 24))
   })()
@@ -384,14 +391,14 @@ export const KanbanCard = memo(function KanbanCard({
                 {daysInStage}d
               </span>
             ) : null}
-            {showFollowupTime && (
+            {lastActivityDate && (
               <span className={`flex items-center gap-0.5 text-[11px] ${
-                daysSinceLastContact !== null && daysSinceLastContact > 7
+                daysSinceLastActivity !== null && daysSinceLastActivity > 7
                   ? 'text-orange-600 font-medium'
                   : 'text-slate-400'
-              }`} title="Tempo sem contato">
-                <ChatBubbleIcon className="w-3 h-3" />
-                {timeSinceContact}
+              }`} title="Última atividade">
+                <ClockIcon className="w-3 h-3" />
+                {timeSinceActivity}
               </span>
             )}
           </div>
