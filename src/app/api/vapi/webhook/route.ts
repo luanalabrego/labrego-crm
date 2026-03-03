@@ -26,6 +26,7 @@ import {
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
+export const maxDuration = 60
 
 /**
  * Resolve orgId from the client document being updated.
@@ -302,16 +303,13 @@ async function handleEndOfCall(body: VapiEndOfCallReport): Promise<NextResponse>
       }
     }
 
-    // ===== REGISTRAR RESULTADO NO CRM (SEMPRE) =====
+    // ===== CLASSIFICAR RESULTADO DA CHAMADA =====
+    let classification: CallOutcomeCode = 'TELEFONE_INDISPONIVEL'
     if (clientId) {
-      // Classificar resultado usando IA
-      let classification: CallOutcomeCode = 'TELEFONE_INDISPONIVEL'
       try {
-        // Usar summary e transcript para classificação mais precisa
         const classificationInput = summary || transcript
         classification = await classifyCallResult(classificationInput, endedReason)
       } catch (classifyError) {
-        // Fallback: se não conectou = TELEFONE_INDISPONIVEL, senão = SEM_INTERESSE
         classification = notConnected && !callHadConversation ? 'TELEFONE_INDISPONIVEL' : 'SEM_INTERESSE'
         console.error('[VAPI WEBHOOK] Error classifying, using fallback:', classification, classifyError)
       }
@@ -441,10 +439,6 @@ async function handleEndOfCall(body: VapiEndOfCallReport): Promise<NextResponse>
     // para que a próxima ligação pendente seja disparada automaticamente
     if (callId) {
       try {
-        const classification = clientId
-          ? await classifyCallResult(summary || transcript, endedReason).catch(() => 'TELEFONE_INDISPONIVEL' as CallOutcomeCode)
-          : ('TELEFONE_INDISPONIVEL' as CallOutcomeCode)
-
         if (notConnected && !callHadConversation) {
           await onCallFailed({ vapiCallId: callId, error: reasonText })
         } else {

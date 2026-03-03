@@ -7,7 +7,7 @@
 // adicionais são feitas em memória (volumes pequenos, max ~200 itens).
 
 import { getAdminDb } from './firebaseAdmin'
-import { makeVapiCall, getActiveProspects, parseMultiplePhones } from './callRouting'
+import { makeVapiCall, getActiveProspects, parseMultiplePhones, getVapiCallDetails, classifyCallResult } from './callRouting'
 import {
   CallQueue,
   CallQueueItem,
@@ -296,15 +296,58 @@ export async function processQueue(queueId: string): Promise<{
   })
 
   if (stuckItems.length > 0) {
-    console.log(`[CALL-QUEUE] Detectadas ${stuckItems.length} chamadas travadas (> ${STUCK_CALL_TIMEOUT_MS / 60000}min), marcando como failed`)
+    console.log(`[CALL-QUEUE] Detectadas ${stuckItems.length} chamadas travadas (> ${STUCK_CALL_TIMEOUT_MS / 60000}min), tentando recuperar via VAPI API`)
     const nowISO = new Date().toISOString()
+    let recoveredCount = 0
+    let failedCount = 0
+
     for (const item of stuckItems) {
-      await db.collection(COLLECTION_QUEUE_ITEMS).doc(item.id).update({
-        status: 'failed' as CallQueueItemStatus,
-        error: 'Timeout: webhook do VAPI não retornou',
-        updatedAt: nowISO,
-        endedAt: nowISO,
-      })
+      // Tentar recuperar resultado real da chamada via VAPI API
+      let recovered = false
+      if (item.vapiCallId) {
+        try {
+          const vapiCall = await getVapiCallDetails(item.vapiCallId)
+          if (vapiCall && vapiCall.status === 'ended') {
+            // Chamada completou no VAPI — recuperar resultado
+            const summary = (vapiCall.analysis as Record<string, unknown>)?.summary as string || ''
+            const transcript = vapiCall.transcript as string || ''
+            const endedReason = vapiCall.endedReason as string || 'unknown'
+            const durationSec = vapiCall.startedAt && vapiCall.endedAt
+              ? Math.round((new Date(vapiCall.endedAt as string).getTime() - new Date(vapiCall.startedAt as string).getTime()) / 1000)
+              : 0
+
+            let outcome: string = 'TELEFONE_INDISPONIVEL'
+            try {
+              outcome = await classifyCallResult(summary || transcript, endedReason)
+            } catch { /* use default */ }
+
+            await db.collection(COLLECTION_QUEUE_ITEMS).doc(item.id).update({
+              status: 'completed' as CallQueueItemStatus,
+              outcome,
+              duration: durationSec,
+              updatedAt: nowISO,
+              endedAt: nowISO,
+            })
+
+            recovered = true
+            recoveredCount++
+            console.log(`[CALL-QUEUE] Recuperada via VAPI API: ${item.name} (${item.vapiCallId}) — ${outcome}`)
+          }
+        } catch (pollError) {
+          console.warn(`[CALL-QUEUE] Erro ao consultar VAPI para ${item.vapiCallId}:`, pollError)
+        }
+      }
+
+      if (!recovered) {
+        // Não conseguiu recuperar — marcar como failed
+        await db.collection(COLLECTION_QUEUE_ITEMS).doc(item.id).update({
+          status: 'failed' as CallQueueItemStatus,
+          error: 'Timeout: webhook do VAPI não retornou',
+          updatedAt: nowISO,
+          endedAt: nowISO,
+        })
+        failedCount++
+      }
 
       // Liberar cadencePendingCallResult do contato se aplicável
       if (item.cadenceStepId) {
@@ -315,12 +358,18 @@ export async function processQueue(queueId: string): Promise<{
         } catch { /* ignore */ }
       }
     }
+
     // Atualizar contadores da fila
     await db.collection(COLLECTION_QUEUE).doc(queueId).update({
-      failedItems: (queue.failedItems || 0) + stuckItems.length,
+      completedItems: (queue.completedItems || 0) + recoveredCount,
+      failedItems: (queue.failedItems || 0) + failedCount,
       activeCallsCount: Math.max(0, (queue.activeCallsCount || 0) - stuckItems.length),
       updatedAt: new Date().toISOString(),
     })
+
+    if (recoveredCount > 0) {
+      console.log(`[CALL-QUEUE] Recuperadas ${recoveredCount} chamadas via VAPI API, ${failedCount} marcadas como failed`)
+    }
   }
 
   // Contar ligações atualmente ativas (excluindo as que acabamos de marcar como failed)

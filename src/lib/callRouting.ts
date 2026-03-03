@@ -53,8 +53,8 @@ const APP_URL =
   (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : '') ||
   'https://labregoia.app.br'
 
-// Cache para evitar PATCH repetido no assistant a cada ligação
-let _vapiAssistantServerUrlConfigured = false
+// Cache: armazena a serverUrl já configurada nesta instância para evitar GET desnecessário
+let _vapiAssistantServerUrlCache: string | null = null
 
 // ========== RATE LIMIT HELPERS ==========
 
@@ -464,15 +464,37 @@ function buildFirstMessage(config: CallRoutingConfig, prospect: {
 
 /**
  * Garante que o assistant do Vapi tem o serverUrl configurado para receber webhooks.
- * Usa PATCH na API do Vapi para atualizar o assistant. Executa apenas 1x por instância.
+ * Verifica a URL atual do assistant via GET e só faz PATCH se estiver diferente.
+ * Cache por instância evita GET repetido, mas valida contra a URL esperada.
  */
 async function ensureVapiAssistantWebhook(assistantId: string): Promise<void> {
-  if (_vapiAssistantServerUrlConfigured || !VAPI_API_KEY || !APP_URL) return
+  if (!VAPI_API_KEY || !APP_URL) return
 
   const webhookUrl = `${APP_URL.replace(/\/$/, '')}/api/vapi/webhook`
 
+  // Se o cache desta instância já tem a URL correta, pular
+  if (_vapiAssistantServerUrlCache === webhookUrl) return
+
   try {
-    console.log(`[VAPI-CONFIG] Configurando serverUrl no assistant ${assistantId}: ${webhookUrl}`)
+    // Verificar URL atual do assistant via GET
+    const getResponse = await vapiFetchWithRetry(`https://api.vapi.ai/assistant/${assistantId}`, {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${VAPI_API_KEY}`,
+      },
+    })
+
+    if (getResponse.ok) {
+      const assistant = await getResponse.json()
+      if (assistant.serverUrl === webhookUrl) {
+        // URL já está correta — atualizar cache e pular PATCH
+        _vapiAssistantServerUrlCache = webhookUrl
+        return
+      }
+    }
+
+    // URL diferente ou não conseguiu verificar — fazer PATCH
+    console.log(`[VAPI-CONFIG] Atualizando serverUrl no assistant ${assistantId}: ${webhookUrl}`)
 
     const response = await vapiFetchWithRetry(`https://api.vapi.ai/assistant/${assistantId}`, {
       method: 'PATCH',
@@ -490,8 +512,8 @@ async function ensureVapiAssistantWebhook(assistantId: string): Promise<void> {
     }
 
     const result = await response.json()
-    console.log(`[VAPI-CONFIG] serverUrl configurada com sucesso no assistant. serverUrl atual: ${result.serverUrl}`)
-    _vapiAssistantServerUrlConfigured = true
+    console.log(`[VAPI-CONFIG] serverUrl configurada com sucesso. serverUrl atual: ${result.serverUrl}`)
+    _vapiAssistantServerUrlCache = webhookUrl
   } catch (error) {
     console.error('[VAPI-CONFIG] Erro ao configurar assistant:', error)
   }
