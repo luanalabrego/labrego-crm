@@ -377,12 +377,17 @@ async function handleEndOfCall(body: VapiEndOfCallReport): Promise<NextResponse>
             // Houve conversa — marcar como respondeu + salvar dados para IA decidir etapa
             await db.collection('clients').doc(clientId).update({
               lastCadenceStepResponded: true,
+              cadencePendingCallResult: false,
               lastCadenceOutcome: classification,
               lastCadenceCallSummary: (summary || transcript).slice(0, 500),
             })
             console.log(`[VAPI WEBHOOK] Cadence contact responded: ${classification} — IA will decide stage`)
           } else {
-            console.log(`[VAPI WEBHOOK] Cadence contact not reached (${endedReason}) — cadence continues`)
+            // Não atendeu — liberar cadência para avançar no próximo cron
+            await db.collection('clients').doc(clientId).update({
+              cadencePendingCallResult: false,
+            })
+            console.log(`[VAPI WEBHOOK] Cadence contact not reached (${endedReason}) — cadence will advance`)
           }
         } else {
           // Fora de cadência — comportamento legado (hardcoded)

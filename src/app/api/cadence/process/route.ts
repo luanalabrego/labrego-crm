@@ -207,6 +207,25 @@ async function processOrg(
     const step = stepMap.get(stepId)
     if (!step || !step.isActive) continue
 
+    // Check if waiting for phone call result from webhook
+    if (contact.cadencePendingCallResult === true) {
+      // Webhook hasn't fired yet — skip, wait for next cron cycle
+      continue
+    }
+
+    // Phone step completed, webhook confirmed not answered — advance now
+    if (contact.cadencePendingCallResult === false && step.contactMethod === 'phone') {
+      await db.collection('clients').doc(contact.id).update({
+        cadencePendingCallResult: null,
+      })
+      const stage = stageMap.get(step.stageId)
+      if (stage) {
+        await advanceToNextStep(db, orgId, contact, step, steps, stageMap)
+        results.processed++
+      }
+      continue
+    }
+
     // Check if stage is paused
     if (pausedStageIds.includes(step.stageId)) continue
 
@@ -271,8 +290,17 @@ async function processOrg(
 
       if (result.success) {
         results.success++
-        // Advance to next step
-        await advanceToNextStep(db, orgId, contact, step, steps, stageMap)
+        if (step.contactMethod === 'phone') {
+          // Phone steps: wait for webhook result before advancing
+          await db.collection('clients').doc(contact.id).update({
+            cadencePendingCallResult: true,
+            lastCadenceActionAt: new Date().toISOString(),
+          })
+          console.log(`[CADENCE] Phone step executed for ${contact.id}, waiting for webhook result`)
+        } else {
+          // Non-phone steps: advance immediately
+          await advanceToNextStep(db, orgId, contact, step, steps, stageMap)
+        }
       } else {
         results.failed++
         // Handle retry
