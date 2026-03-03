@@ -433,22 +433,28 @@ function buildFirstMessage(config: CallRoutingConfig, prospect: {
   const knowledge = config.agentKnowledge
   if (!knowledge?.firstMessage) return undefined
 
-  const firstName = (prospect.name || '').split(' ')[0]
   const greeting = getGreeting()
-  const resolvedContactName = contactName || firstName
+  // Se contactName é vazio (empresa sem sócio), não usar nome nenhum
+  const resolvedContactName = contactName || ''
 
   // Substituir placeholders comuns
-  return knowledge.firstMessage
-    .replace(/\[Nome\]/gi, firstName)
+  let message = knowledge.firstMessage
+    .replace(/\[Nome\]/gi, resolvedContactName)
     .replace(/\[Contato\]/gi, resolvedContactName)
     .replace(/\[Empresa\]/gi, knowledge.companyName || '')
     .replace(/\[EmpresaProspect\]/gi, prospect.company || 'sua empresa')
     .replace(/\[Saudacao\]/gi, greeting)
-    .replace(/\{Nome\}/gi, firstName)
+    .replace(/\{Nome\}/gi, resolvedContactName)
     .replace(/\{Contato\}/gi, resolvedContactName)
     .replace(/\{Empresa\}/gi, knowledge.companyName || '')
     .replace(/\{EmpresaProspect\}/gi, prospect.company || 'sua empresa')
     .replace(/\{Saudacao\}/gi, greeting)
+
+  // Limpar espaços/vírgulas duplas quando nome fica vazio
+  // Ex: "Olá , tudo bem?" → "Olá, tudo bem?"
+  message = message.replace(/\s+,/g, ',').replace(/\s{2,}/g, ' ').trim()
+
+  return message
 }
 
 /**
@@ -532,15 +538,20 @@ export async function makeVapiCall(prospect: {
   await ensureVapiAssistantWebhook(config.voiceAgent.vapiAssistantId)
 
   const greeting = getGreeting()
-  const firstName = (prospect.name || '').split(' ')[0]
   const todayDate = getTodayFormatted()
 
   // Primeiro sócio do prospect (se houver)
   const partnerFirstName = prospect.partners
     ? (prospect.partners.split(',')[0] || '').trim().split(' ')[0]
     : ''
-  // contactName: usa nome do sócio se disponível, senão usa nome do prospect
-  const contactName = partnerFirstName || firstName
+
+  // Detectar se o nome do card é uma empresa (não uma pessoa)
+  const companyIndicators = /\b(ltda|s\.?a\.?|s\/a|eireli|me|epp|micro empresa|sociedade|comercio|construtora|engenharia|servicos|consultoria|distribuidora|importacao|exportacao|industria|empreendimentos|incorporadora|holdings?|group|corp|inc|limited|llc)\b/i
+  const nameIsCompany = companyIndicators.test(prospect.name || '')
+
+  // contactName: 1º sócio → nome do card (se pessoa) → string vazia (empresa sem sócio)
+  const firstName = (prospect.name || '').split(' ')[0]
+  const contactName = partnerFirstName || (nameIsCompany ? '' : firstName)
 
   // Montar overrides baseado no agentKnowledge
   const customFirstMessage = buildFirstMessage(config, prospect, contactName)
