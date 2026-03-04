@@ -38,10 +38,11 @@ export async function POST(request: NextRequest) {
         const config = await getAutomationConfig(orgId)
         if (!config.enabled) continue
 
-        // Check work hours
-        const hours = now.getHours()
-        const minutes = now.getMinutes()
-        const currentTime = `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`
+        // Check work hours using org timezone
+        const tz = config.timezone || 'America/Sao_Paulo'
+        const localTime = now.toLocaleString('en-US', { timeZone: tz, hour: '2-digit', minute: '2-digit', hour12: false })
+        const [localHours, localMinutes] = localTime.split(':').map(Number)
+        const currentTime = `${String(localHours).padStart(2, '0')}:${String(localMinutes).padStart(2, '0')}`
         if (currentTime < config.workHoursStart || currentTime > config.workHoursEnd) {
           continue
         }

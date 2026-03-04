@@ -27,18 +27,23 @@ export async function isAutomationEnabled(orgId: string): Promise<boolean> {
 export async function isWithinWorkHours(orgId: string): Promise<boolean> {
   const config = await getAutomationConfig(orgId)
   const now = new Date()
-  // Use simple hour comparison (timezone handled by cron scheduling)
-  const hours = now.getHours()
-  const minutes = now.getMinutes()
-  const currentTime = `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`
+  const tz = config.timezone || 'America/Sao_Paulo'
+  const localTime = now.toLocaleString('en-US', { timeZone: tz, hour: '2-digit', minute: '2-digit', hour12: false })
+  const [localHours, localMinutes] = localTime.split(':').map(Number)
+  const currentTime = `${String(localHours).padStart(2, '0')}:${String(localMinutes).padStart(2, '0')}`
   return currentTime >= config.workHoursStart && currentTime <= config.workHoursEnd
+}
+
+function getTodayStartISO(): string {
+  // Get today's date in São Paulo timezone, then midnight BRT as ISO
+  const now = new Date()
+  const spDate = now.toLocaleDateString('en-CA', { timeZone: 'America/Sao_Paulo' }) // YYYY-MM-DD
+  return new Date(spDate + 'T00:00:00-03:00').toISOString()
 }
 
 export async function getTodayActionCount(orgId: string): Promise<number> {
   const db = getAdminDb()
-  const today = new Date()
-  today.setHours(0, 0, 0, 0)
-  const todayStr = today.toISOString()
+  const todayStr = getTodayStartISO()
 
   try {
     const snap = await db
@@ -57,9 +62,7 @@ export async function getTodayActionCount(orgId: string): Promise<number> {
 
 export async function getTodayPhoneCallCount(orgId: string): Promise<number> {
   const db = getAdminDb()
-  const today = new Date()
-  today.setHours(0, 0, 0, 0)
-  const todayStr = today.toISOString()
+  const todayStr = getTodayStartISO()
 
   try {
     const snap = await db
@@ -79,9 +82,7 @@ export async function getTodayPhoneCallCount(orgId: string): Promise<number> {
 
 export async function getTodayPhoneCallCountByStage(orgId: string): Promise<Map<string, number>> {
   const db = getAdminDb()
-  const today = new Date()
-  today.setHours(0, 0, 0, 0)
-  const todayStr = today.toISOString()
+  const todayStr = getTodayStartISO()
 
   try {
     const snap = await db
