@@ -30,6 +30,11 @@ const TYPE_BADGE_CLASSES: Record<CreditTransaction['type'], string> = {
   bonus: 'bg-blue-100 text-blue-800',
 }
 
+const CREDIT_TYPE_LABELS: Record<string, string> = {
+  minutes: 'Minutos',
+  actions: 'Ações',
+}
+
 function formatDate(dateStr: string): string {
   try {
     const date = new Date(dateStr)
@@ -45,6 +50,8 @@ function formatDate(dateStr: string): string {
   }
 }
 
+type CreditFilter = 'all' | 'minutes' | 'actions'
+
 export default function CreditsPage() {
   const { orgId } = useCrmUser()
 
@@ -52,6 +59,7 @@ export default function CreditsPage() {
   const [transactions, setTransactions] = useState<CreditTransaction[]>([])
   const [loadingBalance, setLoadingBalance] = useState(true)
   const [loadingTransactions, setLoadingTransactions] = useState(true)
+  const [filter, setFilter] = useState<CreditFilter>('all')
 
   // Real-time balance listener
   useEffect(() => {
@@ -64,7 +72,7 @@ export default function CreditsPage() {
         if (snapshot.exists()) {
           setBalance(snapshot.data() as CreditBalance)
         } else {
-          setBalance({ balance: 0, totalPurchased: 0, totalConsumed: 0 })
+          setBalance({ balance: 0, totalPurchased: 0, totalConsumed: 0, actionBalance: 0, actionTotalPurchased: 0, actionTotalConsumed: 0 })
         }
         setLoadingBalance(false)
       },
@@ -114,6 +122,10 @@ export default function CreditsPage() {
     return () => unsubscribe()
   }, [orgId])
 
+  const filteredTransactions = filter === 'all'
+    ? transactions
+    : transactions.filter(tx => tx.creditType === filter)
+
   return (
     <PlanGate feature="voice_agent">
       <PermissionGate action="canManageSettings">
@@ -127,84 +139,157 @@ export default function CreditsPage() {
                   Gestao de Creditos
                 </span>
                 <h1 className="mt-4 text-2xl font-semibold text-slate-900 sm:text-3xl">
-                  Creditos de Ligacao
+                  Creditos
                 </h1>
                 <p className="mt-2 max-w-xl text-sm text-slate-600 sm:text-base">
-                  Acompanhe o saldo de creditos de minutos de ligacao da sua
-                  organizacao e visualize o historico de transacoes.
+                  Acompanhe o saldo de creditos de acoes e minutos de ligacao da sua
+                  organizacao.
                 </p>
               </div>
             </section>
 
-            {/* Balance Cards */}
-            <section className="grid gap-4 sm:grid-cols-3">
-              {/* Saldo atual */}
-              <div className="rounded-2xl bg-white p-6 shadow-sm ring-1 ring-primary-100/80">
-                <p className="text-xs font-medium uppercase tracking-wider text-primary-500">
-                  Saldo atual
-                </p>
-                {loadingBalance ? (
-                  <div className="mt-3 h-10 w-24 animate-pulse rounded-lg bg-primary-50" />
-                ) : (
-                  <>
-                    <p className="mt-2 text-4xl font-bold text-primary-700">
-                      {balance?.balance?.toLocaleString('pt-BR') ?? 0}
-                    </p>
-                    <p className="mt-1 text-sm text-slate-500">
-                      minutos disponiveis
-                    </p>
-                  </>
-                )}
-              </div>
+            {/* Balance Cards — Actions */}
+            <div>
+              <h2 className="mb-3 text-sm font-semibold uppercase tracking-wider text-slate-500">Acoes (Ligacoes + WhatsApp)</h2>
+              <section className="grid gap-4 sm:grid-cols-3">
+                <div className="rounded-2xl bg-white p-6 shadow-sm ring-1 ring-primary-100/80">
+                  <p className="text-xs font-medium uppercase tracking-wider text-primary-500">
+                    Saldo de acoes
+                  </p>
+                  {loadingBalance ? (
+                    <div className="mt-3 h-10 w-24 animate-pulse rounded-lg bg-primary-50" />
+                  ) : (
+                    <>
+                      <p className="mt-2 text-4xl font-bold text-primary-700">
+                        {balance?.actionBalance?.toLocaleString('pt-BR') ?? 0}
+                      </p>
+                      <p className="mt-1 text-sm text-slate-500">
+                        acoes disponiveis
+                      </p>
+                    </>
+                  )}
+                </div>
+                <div className="rounded-2xl bg-white p-6 shadow-sm ring-1 ring-primary-100/80">
+                  <p className="text-xs font-medium uppercase tracking-wider text-red-500">
+                    Acoes consumidas
+                  </p>
+                  {loadingBalance ? (
+                    <div className="mt-3 h-10 w-24 animate-pulse rounded-lg bg-red-50" />
+                  ) : (
+                    <>
+                      <p className="mt-2 text-4xl font-bold text-red-600">
+                        {balance?.actionTotalConsumed?.toLocaleString('pt-BR') ?? 0}
+                      </p>
+                      <p className="mt-1 text-sm text-slate-500">
+                        acoes usadas
+                      </p>
+                    </>
+                  )}
+                </div>
+                <div className="rounded-2xl bg-white p-6 shadow-sm ring-1 ring-primary-100/80">
+                  <p className="text-xs font-medium uppercase tracking-wider text-green-500">
+                    Acoes adquiridas
+                  </p>
+                  {loadingBalance ? (
+                    <div className="mt-3 h-10 w-24 animate-pulse rounded-lg bg-green-50" />
+                  ) : (
+                    <>
+                      <p className="mt-2 text-4xl font-bold text-green-600">
+                        {balance?.actionTotalPurchased?.toLocaleString('pt-BR') ?? 0}
+                      </p>
+                      <p className="mt-1 text-sm text-slate-500">
+                        acoes compradas
+                      </p>
+                    </>
+                  )}
+                </div>
+              </section>
+            </div>
 
-              {/* Total consumido */}
-              <div className="rounded-2xl bg-white p-6 shadow-sm ring-1 ring-primary-100/80">
-                <p className="text-xs font-medium uppercase tracking-wider text-red-500">
-                  Total consumido
-                </p>
-                {loadingBalance ? (
-                  <div className="mt-3 h-10 w-24 animate-pulse rounded-lg bg-red-50" />
-                ) : (
-                  <>
-                    <p className="mt-2 text-4xl font-bold text-red-600">
-                      {balance?.totalConsumed?.toLocaleString('pt-BR') ?? 0}
-                    </p>
-                    <p className="mt-1 text-sm text-slate-500">
-                      minutos usados
-                    </p>
-                  </>
-                )}
-              </div>
-
-              {/* Total adquirido */}
-              <div className="rounded-2xl bg-white p-6 shadow-sm ring-1 ring-primary-100/80">
-                <p className="text-xs font-medium uppercase tracking-wider text-green-500">
-                  Total adquirido
-                </p>
-                {loadingBalance ? (
-                  <div className="mt-3 h-10 w-24 animate-pulse rounded-lg bg-green-50" />
-                ) : (
-                  <>
-                    <p className="mt-2 text-4xl font-bold text-green-600">
-                      {balance?.totalPurchased?.toLocaleString('pt-BR') ?? 0}
-                    </p>
-                    <p className="mt-1 text-sm text-slate-500">
-                      minutos comprados
-                    </p>
-                  </>
-                )}
-              </div>
-            </section>
+            {/* Balance Cards — Minutes */}
+            <div>
+              <h2 className="mb-3 text-sm font-semibold uppercase tracking-wider text-slate-500">Minutos de Ligacao</h2>
+              <section className="grid gap-4 sm:grid-cols-3">
+                <div className="rounded-2xl bg-white p-6 shadow-sm ring-1 ring-primary-100/80">
+                  <p className="text-xs font-medium uppercase tracking-wider text-primary-500">
+                    Saldo de minutos
+                  </p>
+                  {loadingBalance ? (
+                    <div className="mt-3 h-10 w-24 animate-pulse rounded-lg bg-primary-50" />
+                  ) : (
+                    <>
+                      <p className="mt-2 text-4xl font-bold text-primary-700">
+                        {balance?.balance?.toLocaleString('pt-BR') ?? 0}
+                      </p>
+                      <p className="mt-1 text-sm text-slate-500">
+                        minutos disponiveis
+                      </p>
+                    </>
+                  )}
+                </div>
+                <div className="rounded-2xl bg-white p-6 shadow-sm ring-1 ring-primary-100/80">
+                  <p className="text-xs font-medium uppercase tracking-wider text-red-500">
+                    Minutos consumidos
+                  </p>
+                  {loadingBalance ? (
+                    <div className="mt-3 h-10 w-24 animate-pulse rounded-lg bg-red-50" />
+                  ) : (
+                    <>
+                      <p className="mt-2 text-4xl font-bold text-red-600">
+                        {balance?.totalConsumed?.toLocaleString('pt-BR') ?? 0}
+                      </p>
+                      <p className="mt-1 text-sm text-slate-500">
+                        minutos usados
+                      </p>
+                    </>
+                  )}
+                </div>
+                <div className="rounded-2xl bg-white p-6 shadow-sm ring-1 ring-primary-100/80">
+                  <p className="text-xs font-medium uppercase tracking-wider text-green-500">
+                    Minutos adquiridos
+                  </p>
+                  {loadingBalance ? (
+                    <div className="mt-3 h-10 w-24 animate-pulse rounded-lg bg-green-50" />
+                  ) : (
+                    <>
+                      <p className="mt-2 text-4xl font-bold text-green-600">
+                        {balance?.totalPurchased?.toLocaleString('pt-BR') ?? 0}
+                      </p>
+                      <p className="mt-1 text-sm text-slate-500">
+                        minutos comprados
+                      </p>
+                    </>
+                  )}
+                </div>
+              </section>
+            </div>
 
             {/* Transaction History */}
             <section className="rounded-3xl bg-white/90 shadow-sm ring-1 ring-primary-100/70">
-              <div className="border-b border-primary-50 px-6 py-5">
-                <h2 className="text-lg font-semibold text-slate-900">
-                  Historico de transacoes
-                </h2>
-                <p className="mt-1 text-xs text-slate-500">
-                  Ultimas 50 transacoes de creditos da organizacao.
-                </p>
+              <div className="flex items-center justify-between border-b border-primary-50 px-6 py-5">
+                <div>
+                  <h2 className="text-lg font-semibold text-slate-900">
+                    Historico de transacoes
+                  </h2>
+                  <p className="mt-1 text-xs text-slate-500">
+                    Ultimas 50 transacoes de creditos da organizacao.
+                  </p>
+                </div>
+                <div className="flex items-center gap-1 rounded-lg bg-slate-100 p-0.5">
+                  {(['all', 'actions', 'minutes'] as CreditFilter[]).map((f) => (
+                    <button
+                      key={f}
+                      onClick={() => setFilter(f)}
+                      className={`px-3 py-1.5 rounded-md text-xs font-medium transition-all ${
+                        filter === f
+                          ? 'bg-white text-primary-700 shadow-sm'
+                          : 'text-slate-500 hover:text-slate-700'
+                      }`}
+                    >
+                      {f === 'all' ? 'Todos' : f === 'actions' ? 'Acoes' : 'Minutos'}
+                    </button>
+                  ))}
+                </div>
               </div>
 
               <div className="px-4 pb-6 pt-4">
@@ -213,7 +298,7 @@ export default function CreditsPage() {
                     <span className="mr-2 h-4 w-4 animate-spin rounded-full border-2 border-primary-500 border-t-transparent" />
                     Carregando transacoes...
                   </div>
-                ) : transactions.length === 0 ? (
+                ) : filteredTransactions.length === 0 ? (
                   <div className="flex flex-col items-center gap-3 rounded-2xl border border-dashed border-primary-200 bg-primary-50/40 px-6 py-12 text-center">
                     <p className="text-sm font-medium text-slate-600">
                       Nenhuma transacao registrada.
@@ -230,6 +315,7 @@ export default function CreditsPage() {
                         <tr>
                           <th className="whitespace-nowrap px-4 py-3">Data</th>
                           <th className="whitespace-nowrap px-4 py-3">Tipo</th>
+                          <th className="whitespace-nowrap px-4 py-3">Credito</th>
                           <th className="whitespace-nowrap px-4 py-3 text-right">
                             Quantidade
                           </th>
@@ -245,7 +331,7 @@ export default function CreditsPage() {
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-primary-50">
-                        {transactions.map((tx) => (
+                        {filteredTransactions.map((tx) => (
                           <tr
                             key={tx.id}
                             className="transition-colors hover:bg-primary-50/60"
@@ -258,6 +344,15 @@ export default function CreditsPage() {
                                 className={`inline-flex rounded-full px-2.5 py-0.5 text-xs font-medium ${TYPE_BADGE_CLASSES[tx.type]}`}
                               >
                                 {TYPE_LABELS[tx.type]}
+                              </span>
+                            </td>
+                            <td className="whitespace-nowrap px-4 py-3">
+                              <span className={`inline-flex rounded-full px-2.5 py-0.5 text-xs font-medium ${
+                                tx.creditType === 'actions'
+                                  ? 'bg-purple-100 text-purple-800'
+                                  : 'bg-sky-100 text-sky-800'
+                              }`}>
+                                {CREDIT_TYPE_LABELS[tx.creditType] || tx.creditType}
                               </span>
                             </td>
                             <td className="whitespace-nowrap px-4 py-3 text-right font-semibold">

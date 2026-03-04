@@ -76,3 +76,30 @@ export async function getTodayPhoneCallCount(orgId: string): Promise<number> {
     return 0
   }
 }
+
+export async function getTodayPhoneCallCountByStage(orgId: string): Promise<Map<string, number>> {
+  const db = getAdminDb()
+  const today = new Date()
+  today.setHours(0, 0, 0, 0)
+  const todayStr = today.toISOString()
+
+  try {
+    const snap = await db
+      .collection('organizations').doc(orgId).collection('cadenceExecutionLog')
+      .where('executedAt', '>=', todayStr)
+      .get()
+
+    const counts = new Map<string, number>()
+    for (const doc of snap.docs) {
+      const data = doc.data()
+      if (data.channel === 'phone' && (data.status === 'success' || data.status === 'failed')) {
+        const stageId = (data.stageId as string) || '__unknown__'
+        counts.set(stageId, (counts.get(stageId) || 0) + 1)
+      }
+    }
+    return counts
+  } catch (error) {
+    console.warn(`getTodayPhoneCallCountByStage failed for org ${orgId}:`, error instanceof Error ? error.message : error)
+    return new Map()
+  }
+}

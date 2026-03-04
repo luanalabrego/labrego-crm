@@ -168,7 +168,7 @@ export default function SuperAdminPage() {
                 <tr key={org.id} className="border-b border-gray-50 hover:bg-gray-50 transition">
                   <td className="px-4 py-3 font-medium text-gray-900">{org.name}</td>
                   <td className="px-4 py-3 text-gray-500 text-xs">{org.adminEmail || '—'}</td>
-                  <td className="px-4 py-3 text-gray-600">{PLAN_DISPLAY[org.plan]?.displayName || org.plan}</td>
+                  <td className="px-4 py-3 text-gray-600">{(PLAN_DISPLAY as Record<string, { displayName: string }>)[org.plan]?.displayName || org.plan}</td>
                   <td className="px-4 py-3 text-center">
                     <button
                       onClick={() => handleToggleStatus(org)}

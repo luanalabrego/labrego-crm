@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getAdminDb } from '@/lib/firebaseAdmin'
-import { getAutomationConfig, getTodayActionCount, getTodayPhoneCallCount } from '@/lib/automationConfig'
+import { getAutomationConfig, getTodayActionCount, getTodayPhoneCallCount, getTodayPhoneCallCountByStage } from '@/lib/automationConfig'
 import { executeCadenceStep, logCadenceExecution, determineBestStage } from '@/lib/cadenceExecutors'
 import { createCadenceCallQueue, getCallQueue, processQueue } from '@/lib/callQueue'
 import type { CadenceStep, CadenceExecutionLog, AutomationConfig } from '@/types/cadence'
@@ -58,6 +58,20 @@ export async function POST(request: NextRequest) {
         await enrollUnenrolledContacts(db, orgId, config.pausedStageIds, results)
 
         await processOrg(db, orgId, config, remaining, results)
+
+        // Salvar stats do último processamento no automationConfig para visibilidade no frontend
+        await db.collection('organizations').doc(orgId).collection('automationConfig').doc('global').set({
+          lastCronRunAt: now.toISOString(),
+          lastCronStats: {
+            enrolled: results.enrolled,
+            processed: results.processed,
+            success: results.success,
+            failed: results.failed,
+            skipped: results.skipped,
+            todayActions: todayCount + results.success,
+            maxActionsPerDay: config.maxActionsPerDay,
+          },
+        }, { merge: true })
       } catch (orgError) {
         console.error(`Cadence error for org ${orgId}:`, orgError)
         results.failed++
@@ -235,13 +249,26 @@ async function processOrg(
     if (!stage) continue
 
     // Check timing: lastCadenceActionAt + daysAfterPrevious <= now
+    // Usa comparação por dias corridos (meia-noite) para evitar pular steps
+    // por diferença de horas. Ex: D0 executou 14h → D1 elegível a partir de meia-noite do dia seguinte.
     const lastAction = contact.lastCadenceActionAt as string
-    if (lastAction) {
-      const nextEligible = new Date(lastAction)
-      nextEligible.setDate(nextEligible.getDate() + step.daysAfterPrevious)
-      if (nextEligible > now) continue
+    if (lastAction && step.daysAfterPrevious > 0) {
+      const lastActionDate = new Date(lastAction)
+      // Normalizar para meia-noite UTC do dia da última ação
+      const lastActionDay = new Date(Date.UTC(
+        lastActionDate.getUTCFullYear(),
+        lastActionDate.getUTCMonth(),
+        lastActionDate.getUTCDate()
+      ))
+      const nowDay = new Date(Date.UTC(
+        now.getUTCFullYear(),
+        now.getUTCMonth(),
+        now.getUTCDate()
+      ))
+      const daysDiff = Math.floor((nowDay.getTime() - lastActionDay.getTime()) / (1000 * 60 * 60 * 24))
+      if (daysDiff < step.daysAfterPrevious) continue
     }
-    // If no lastCadenceActionAt, first step executes immediately
+    // If daysAfterPrevious === 0 or no lastCadenceActionAt, executes immediately
 
     eligible.push({ contact, step, stage })
   }
@@ -263,17 +290,40 @@ async function processOrg(
     await processQueue(existingQueue.id)
     results.skipped += phoneEligible.length
   } else if (phoneEligible.length > 0) {
-    // Calculate daily phone budget
+    // Calculate per-stage phone budgets
+    const stagePhoneCounts = await getTodayPhoneCallCountByStage(orgId)
     const todayPhoneCount = await getTodayPhoneCallCount(orgId)
-    const maxPhoneDaily = config.maxCallsPerDay ?? 300
-    const phoneBudget = Math.max(0, maxPhoneDaily - todayPhoneCount)
+    const globalMaxPhoneDaily = config.maxCallsPerDay ?? 300
+    const globalPhoneBudget = Math.max(0, globalMaxPhoneDaily - todayPhoneCount)
 
-    if (phoneBudget === 0) {
-      console.log(`[CADENCE] Daily phone limit reached (${todayPhoneCount}/${maxPhoneDaily}), skipping phone steps`)
+    if (globalPhoneBudget === 0) {
+      console.log(`[CADENCE] Global daily phone limit reached (${todayPhoneCount}/${globalMaxPhoneDaily}), skipping phone steps`)
       results.skipped += phoneEligible.length
     } else {
-      // Limit to daily budget
-      const phonesToEnqueue = phoneEligible.slice(0, Math.min(phoneBudget, actionsLeft))
+      // Filter by per-stage hours and daily limits
+      const currentTime = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`
+      const stageBudgetsUsed = new Map<string, number>()
+
+      const phoneFiltered = phoneEligible.filter(({ step, stage }) => {
+        const stageData = stage as unknown as Record<string, unknown>
+        const stageStartHour = (stageData.callStartHour as string) || config.workHoursStart
+        const stageEndHour = (stageData.callEndHour as string) || config.workHoursEnd
+        const stageMaxCalls = (stageData.maxCallsPerDay as number) || globalMaxPhoneDaily
+
+        // Check per-stage hours
+        if (currentTime < stageStartHour || currentTime > stageEndHour) return false
+
+        // Check per-stage daily limit
+        const stageUsedToday = (stagePhoneCounts.get(stage.id) || 0) + (stageBudgetsUsed.get(stage.id) || 0)
+        if (stageUsedToday >= stageMaxCalls) return false
+
+        // Track usage
+        stageBudgetsUsed.set(stage.id, (stageBudgetsUsed.get(stage.id) || 0) + 1)
+        return true
+      })
+
+      // Limit to global budget
+      const phonesToEnqueue = phoneFiltered.slice(0, Math.min(globalPhoneBudget, actionsLeft))
       const skippedCount = phoneEligible.length - phonesToEnqueue.length
 
       // Build contacts for queue
@@ -292,6 +342,7 @@ async function processOrg(
           company: (contact.company as string) || undefined,
           industry: (contact.industry as string) || undefined,
           partners: (contact.partners as string) || undefined,
+          stageId: step.stageId,
           cadenceStepId: step.id,
           cadenceOverrides,
         }
@@ -299,10 +350,12 @@ async function processOrg(
 
       // Create queue and start processing
       const maxConcurrent = config.maxConcurrentCalls ?? 10
+      const callStaggerDelayMs = config.callStaggerDelayMs ?? 10000
       const { queueId, totalItems } = await createCadenceCallQueue({
         contacts: queueContacts,
         maxConcurrent,
         orgId,
+        callStaggerDelayMs,
       })
 
       // Mark all enqueued contacts as pending call result

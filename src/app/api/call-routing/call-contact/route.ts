@@ -27,13 +27,15 @@ async function resolveOrgId(req: NextRequest): Promise<string> {
 // POST - Disparar ligação para um contato específico
 export async function POST(req: NextRequest) {
   try {
-    const orgId = await resolveOrgId(req)
+    const body = await req.json()
+    const { clientId, name, phone, company, industry, partners } = body
+
+    // Resolve orgId: body > headers > email lookup > fallback
+    let orgId = body.orgId || null
+    if (!orgId) orgId = await resolveOrgId(req)
     if (!orgId) {
       return NextResponse.json({ error: 'orgId is required' }, { status: 400 })
     }
-
-    const body = await req.json()
-    const { clientId, name, phone, company, industry, partners } = body
 
     if (!clientId || !name || !phone) {
       return NextResponse.json(

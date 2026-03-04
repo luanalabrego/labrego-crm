@@ -2,7 +2,7 @@ export interface Organization {
   id: string
   name: string
   slug: string // unique, URL-friendly
-  plan: 'basic' | 'standard' | 'pro'
+  plan: string // PlanId from plan.ts
   adminEmail?: string
   logoUrl?: string
   settings: OrgSettings

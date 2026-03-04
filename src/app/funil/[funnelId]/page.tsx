@@ -28,6 +28,7 @@ import {
 import { db, storage } from '@/lib/firebaseClient'
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage'
 import { useCrmUser } from '@/contexts/CrmUserContext'
+import { useCredits } from '@/hooks/useCredits'
 import type { OrgMember } from '@/types/organization'
 import { usePermissions } from '@/hooks/usePermissions'
 import { useVisibleStages } from '@/hooks/useVisibleStages'
@@ -77,6 +78,7 @@ import {
   CurrencyDollarIcon,
   DocumentDuplicateIcon,
   ArrowDownTrayIcon,
+  BoltIcon,
 } from '@heroicons/react/24/outline'
 import { toast } from 'sonner'
 
@@ -260,6 +262,7 @@ export default function FunilDetailPage() {
   const params = useParams()
   const funnelId = params.funnelId as string
   const { userEmail, orgId, member } = useCrmUser()
+  const credits = useCredits(orgId || undefined)
   const { viewScope, can } = usePermissions()
   const { filterStages } = useVisibleStages(funnelId)
 
@@ -267,12 +270,22 @@ export default function FunilDetailPage() {
   const [filterAssignedTo, setFilterAssignedTo] = useState<string>('')
 
   // Period filter
-  const [filterDateFrom, setFilterDateFrom] = useState<string>('')
-  const [filterDateTo, setFilterDateTo] = useState<string>('')
+  const [showReportModal, setShowReportModal] = useState(false)
+  const [reportDateFrom, setReportDateFrom] = useState<string>('')
+  const [reportDateTo, setReportDateTo] = useState<string>('')
 
   // Export states
   const [exportingExcel, setExportingExcel] = useState(false)
   const [exportingPdf, setExportingPdf] = useState(false)
+
+  // Automation status
+  const [autoConfig, setAutoConfig] = useState<{
+    enabled: boolean
+    lastCronRunAt?: string
+    lastCronStats?: { enrolled: number; processed: number; success: number; failed: number; todayActions: number; maxActionsPerDay: number }
+  } | null>(null)
+  const [activeQueue, setActiveQueue] = useState<{ totalItems: number; completedItems: number; activeCallsCount: number; failedItems?: number } | null>(null)
+  const [showAutoPanel, setShowAutoPanel] = useState(false)
 
   // Funnel metadata
   const [funnelName, setFunnelName] = useState<string>('')
@@ -528,6 +541,13 @@ export default function FunilDetailPage() {
   const [newContactPhotoFile, setNewContactPhotoFile] = useState<File | null>(null)
   const [newContactPhotoPreview, setNewContactPhotoPreview] = useState<string | null>(null)
   const [savingNewContact, setSavingNewContact] = useState(false)
+  const [newContactPartners, setNewContactPartners] = useState<string[]>([])
+  const [newPartnerInput, setNewPartnerInput] = useState('')
+
+  // Force cadence modal
+  const [forceCadenceStageId, setForceCadenceStageId] = useState<string | null>(null)
+  const [forceCadenceLimit, setForceCadenceLimit] = useState(10)
+  const [forcingCadence, setForcingCadence] = useState(false)
 
   // Load clients for this funnel
   useEffect(() => {
@@ -570,6 +590,46 @@ export default function FunilDetailPage() {
       const data = snap.docs.map((d) => ({ id: d.id, ...d.data() })) as CadenceStep[]
       setCadenceSteps(data.sort((a, b) => a.order - b.order))
     })
+    return () => unsub()
+  }, [orgId])
+
+  // Load automation config
+  useEffect(() => {
+    if (!orgId) return
+    const unsub = onSnapshot(doc(db, 'organizations', orgId, 'automationConfig', 'global'), (snap) => {
+      if (snap.exists()) {
+        const data = snap.data()
+        setAutoConfig({
+          enabled: !!data.enabled,
+          lastCronRunAt: (data.lastCronRunAt as string) || undefined,
+          lastCronStats: data.lastCronStats ? data.lastCronStats as { enrolled: number; processed: number; success: number; failed: number; todayActions: number; maxActionsPerDay: number } : undefined,
+        })
+      } else {
+        setAutoConfig({ enabled: false })
+      }
+    })
+    return () => unsub()
+  }, [orgId])
+
+  // Load active call queue
+  useEffect(() => {
+    if (!orgId) return
+    const unsub = onSnapshot(
+      query(collection(db, 'callQueues'), where('orgId', '==', orgId), where('status', '==', 'running')),
+      (snap) => {
+        if (snap.empty) {
+          setActiveQueue(null)
+        } else {
+          const queueData = snap.docs[0].data()
+          setActiveQueue({
+            totalItems: (queueData.totalItems as number) || 0,
+            completedItems: (queueData.completedItems as number) || 0,
+            activeCallsCount: (queueData.activeCallsCount as number) || 0,
+            failedItems: (queueData.failedItems as number) || 0,
+          })
+        }
+      }
+    )
     return () => unsub()
   }, [orgId])
 
@@ -819,23 +879,7 @@ export default function FunilDetailPage() {
       }
     }
 
-    // Apply period filter
-    if (filterDateFrom) {
-      const from = new Date(filterDateFrom)
-      from.setHours(0, 0, 0, 0)
-      result = result.filter((c) => {
-        const created = c.createdAt ? new Date(c.createdAt) : null
-        return created && created >= from
-      })
-    }
-    if (filterDateTo) {
-      const to = new Date(filterDateTo)
-      to.setHours(23, 59, 59, 999)
-      result = result.filter((c) => {
-        const created = c.createdAt ? new Date(c.createdAt) : null
-        return created && created <= to
-      })
-    }
+    // Period filter moved to Report Modal (reportDateFrom/reportDateTo)
 
     // Apply text search filter
     if (searchTerm.trim()) {
@@ -952,7 +996,7 @@ export default function FunilDetailPage() {
     }
 
     return result
-  }, [clients, searchTerm, advancedFilters, activeAdvancedFiltersCount, viewScope, member?.id, filterAssignedTo, filterDateFrom, filterDateTo])
+  }, [clients, searchTerm, advancedFilters, activeAdvancedFiltersCount, viewScope, member?.id, filterAssignedTo])
 
   // Apply funnelAccess stage filter
   const visibleFunnelStages = useMemo(() => filterStages(funnelStages), [funnelStages, filterStages])
@@ -1873,6 +1917,7 @@ export default function FunilDetailPage() {
         leadType: newContactForm.leadType || null,
         photoUrl: photoUrl || null,
         costCenterId: newContactForm.costCenterId || null,
+        partners: newContactPartners.length > 0 ? newContactPartners.join(', ') : null,
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
         orgId,
@@ -1886,6 +1931,8 @@ export default function FunilDetailPage() {
       setNewContactForm(emptyContactForm)
       setNewContactPhotoFile(null)
       setNewContactPhotoPreview(null)
+      setNewContactPartners([])
+      setNewPartnerInput('')
       toast.success('Contato adicionado com sucesso!')
     } catch (error) {
       console.error('Erro ao salvar:', error)
@@ -1998,12 +2045,35 @@ export default function FunilDetailPage() {
     }
   }
 
+  // Get clients filtered by report date range (uses kanban filters + report dates)
+  const getReportClients = useCallback(() => {
+    let result = filteredClients
+    if (reportDateFrom) {
+      const from = new Date(reportDateFrom)
+      from.setHours(0, 0, 0, 0)
+      result = result.filter((c) => {
+        const created = c.createdAt ? new Date(c.createdAt) : null
+        return created && created >= from
+      })
+    }
+    if (reportDateTo) {
+      const to = new Date(reportDateTo)
+      to.setHours(23, 59, 59, 999)
+      result = result.filter((c) => {
+        const created = c.createdAt ? new Date(c.createdAt) : null
+        return created && created <= to
+      })
+    }
+    return result
+  }, [filteredClients, reportDateFrom, reportDateTo])
+
   // Export to Excel
   const handleExportExcel = async () => {
     setExportingExcel(true)
     try {
       const XLSX = await import('xlsx')
-      const data = filteredClients.map((c) => ({
+      const exportClients = getReportClients()
+      const data = exportClients.map((c) => ({
         Nome: c.name || '',
         Empresa: c.company || '',
         Telefone: c.phone || '',
@@ -2023,9 +2093,10 @@ export default function FunilDetailPage() {
       const wb = XLSX.utils.book_new()
       XLSX.utils.book_append_sheet(wb, ws, 'Contatos')
       XLSX.writeFile(wb, `relatorio_${funnelName}_${new Date().toISOString().split('T')[0]}.xlsx`)
+      toast.success('Relatório Excel exportado com sucesso')
     } catch (error) {
       console.error('Erro ao exportar Excel:', error)
-      alert('Erro ao exportar relatório')
+      toast.error('Erro ao exportar relatório')
     } finally {
       setExportingExcel(false)
     }
@@ -2037,6 +2108,7 @@ export default function FunilDetailPage() {
     try {
       const { default: jsPDF } = await import('jspdf')
       const { default: autoTable } = await import('jspdf-autotable')
+      const exportClients = getReportClients()
 
       const doc = new jsPDF()
 
@@ -2047,20 +2119,20 @@ export default function FunilDetailPage() {
       doc.setFontSize(10)
       doc.setTextColor(100, 100, 100)
       doc.text(`Funil: ${funnelName}`, 14, 28)
-      if (filterDateFrom || filterDateTo) {
-        doc.text(`Período: ${filterDateFrom || '...'} a ${filterDateTo || '...'}`, 14, 34)
+      if (reportDateFrom || reportDateTo) {
+        doc.text(`Período: ${reportDateFrom || '...'} a ${reportDateTo || '...'}`, 14, 34)
       }
-      doc.text(`Gerado em: ${new Date().toLocaleDateString('pt-BR')}`, 14, filterDateFrom || filterDateTo ? 40 : 34)
+      doc.text(`Gerado em: ${new Date().toLocaleDateString('pt-BR')}`, 14, reportDateFrom || reportDateTo ? 40 : 34)
 
       // KPIs
-      const totalContatos = filteredClients.length
+      const totalContatos = exportClients.length
       const stageBreakdown: Record<string, number> = {}
-      filteredClients.forEach((c) => {
+      exportClients.forEach((c) => {
         const stageName = funnelStages.find((s) => s.id === c.funnelStage)?.name || 'Sem etapa'
         stageBreakdown[stageName] = (stageBreakdown[stageName] || 0) + 1
       })
 
-      let yPos = filterDateFrom || filterDateTo ? 50 : 44
+      let yPos = reportDateFrom || reportDateTo ? 50 : 44
       doc.setFontSize(14)
       doc.setTextColor(30, 30, 30)
       doc.text('Resumo', 14, yPos)
@@ -2086,9 +2158,10 @@ export default function FunilDetailPage() {
       })
 
       doc.save(`resumo_${funnelName}_${new Date().toISOString().split('T')[0]}.pdf`)
+      toast.success('Resumo PDF gerado com sucesso')
     } catch (error) {
       console.error('Erro ao gerar PDF:', error)
-      alert('Erro ao gerar resumo PDF')
+      toast.error('Erro ao gerar resumo PDF')
     } finally {
       setExportingPdf(false)
     }
@@ -2378,7 +2451,12 @@ export default function FunilDetailPage() {
       await new Promise(r => setTimeout(r, 10000)) // 10s entre polls
       try {
         console.log(`[POLL] Poll ${i + 1}/${maxPolls} para call ${callId}...`)
-        const res = await fetch(`/api/vapi/poll-call?${params.toString()}`)
+        const res = await fetch(`/api/vapi/poll-call?${params.toString()}`, {
+          headers: {
+            ...(userEmail ? { 'x-user-email': userEmail } : {}),
+            ...(orgId ? { 'x-org-id': orgId } : {}),
+          },
+        })
         const data = await res.json()
         console.log(`[POLL] Resposta poll ${i + 1}:`, data)
 
@@ -2455,13 +2533,18 @@ export default function FunilDetailPage() {
     try {
       const res = await fetch('/api/call-routing/call-contact', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(userEmail ? { 'x-user-email': userEmail } : {}),
+          ...(orgId ? { 'x-org-id': orgId } : {}),
+        },
         body: JSON.stringify({
           clientId: selectedClient.id,
           name: selectedClient.name,
           phone: selectedClient.phone,
           company: selectedClient.company,
           industry: selectedClient.industry,
+          orgId,
         }),
       })
       const data = await res.json()
@@ -2790,12 +2873,40 @@ export default function FunilDetailPage() {
     const currentType = sortType[stageId]
     const currentDirection = sortDirection[stageId]
     const isSameType = currentType === type
-    const newDirection = isSameType && currentDirection === 'asc' ? 'desc' : 'asc'
+
+    // Primeiro clique: desc (mais recente primeiro). Depois alterna.
+    let newDirection: 'asc' | 'desc'
+    if (!isSameType || !currentDirection) {
+      newDirection = 'desc'
+    } else {
+      newDirection = currentDirection === 'desc' ? 'asc' : 'desc'
+    }
 
     setSortDirection((prev) => ({ ...prev, [stageId]: newDirection }))
     setSortType((prev) => ({ ...prev, [stageId]: type }))
     setSortMenuOpen(null)
+    setStagePages({})
   }, [sortType, sortDirection])
+
+  const handleForceCadence = useCallback(async () => {
+    if (!forceCadenceStageId || !orgId) return
+    setForcingCadence(true)
+    try {
+      const res = await fetch('/api/cadence/force-stage', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ orgId, stageId: forceCadenceStageId, limit: forceCadenceLimit }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || 'Erro ao forçar cadência')
+      toast.success(data.message || `Cadência forçada para ${data.total} contatos`)
+      setForceCadenceStageId(null)
+    } catch (err) {
+      toast.error(String(err instanceof Error ? err.message : err))
+    } finally {
+      setForcingCadence(false)
+    }
+  }, [forceCadenceStageId, forceCadenceLimit, orgId])
 
   // Close sort menu when clicking outside
   useEffect(() => {
@@ -3046,6 +3157,133 @@ export default function FunilDetailPage() {
                   <h1 className="text-xl font-bold text-slate-800 truncate">{funnelName || 'Funil de Vendas'}</h1>
                   <span className="hidden sm:inline text-slate-300">·</span>
                   <span className="hidden sm:inline text-sm text-slate-500 flex-shrink-0">{globalMetrics.totalContacts} contato{globalMetrics.totalContacts !== 1 ? 's' : ''}</span>
+                  {/* Automation Status Pill (clicável) */}
+                  {autoConfig && (
+                    <div className="relative hidden sm:block">
+                      <span className="inline text-slate-300 mr-1">·</span>
+                      <button
+                        type="button"
+                        onClick={() => setShowAutoPanel(!showAutoPanel)}
+                        className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium transition-colors ${
+                          activeQueue
+                            ? 'bg-green-100 text-green-700 hover:bg-green-200'
+                            : autoConfig.enabled
+                            ? 'bg-emerald-50 text-emerald-600 hover:bg-emerald-100'
+                            : 'bg-slate-100 text-slate-500 hover:bg-slate-200'
+                        }`}
+                      >
+                        <span className={`w-1.5 h-1.5 rounded-full ${
+                          activeQueue ? 'bg-green-500 animate-pulse' : autoConfig.enabled ? 'bg-emerald-400' : 'bg-slate-400'
+                        }`} />
+                        {activeQueue ? (
+                          <>
+                            Ligando {activeQueue.completedItems}/{activeQueue.totalItems}
+                            {activeQueue.activeCallsCount > 0 && ` · ${activeQueue.activeCallsCount} ativas`}
+                          </>
+                        ) : autoConfig.enabled ? 'Automações ativas' : 'Automações pausadas'}
+                        <ChevronDownIcon className="w-3 h-3" />
+                      </button>
+
+                      {/* Painel expandido */}
+                      {showAutoPanel && (
+                        <>
+                          <div className="fixed inset-0 z-40" onClick={() => setShowAutoPanel(false)} />
+                          <div className="absolute right-0 top-full z-50 mt-2 w-80 rounded-xl bg-white p-4 shadow-xl ring-1 ring-black/10">
+                            <h4 className="text-sm font-semibold text-slate-900 mb-3">Status da Cadência</h4>
+
+                            {/* Status geral */}
+                            <div className="space-y-2 text-xs">
+                              <div className="flex justify-between">
+                                <span className="text-slate-500">Automação</span>
+                                <span className={autoConfig.enabled ? 'text-green-600 font-medium' : 'text-red-500 font-medium'}>
+                                  {autoConfig.enabled ? 'Ligada' : 'Desligada'}
+                                </span>
+                              </div>
+
+                              {/* Último processamento */}
+                              <div className="flex justify-between">
+                                <span className="text-slate-500">Último cron</span>
+                                <span className="text-slate-700 font-medium">
+                                  {autoConfig.lastCronRunAt ? (() => {
+                                    const mins = Math.round((Date.now() - new Date(autoConfig.lastCronRunAt).getTime()) / 60000)
+                                    return mins < 1 ? 'agora' : mins < 60 ? `${mins} min atrás` : `${Math.round(mins / 60)}h atrás`
+                                  })() : 'Nunca'}
+                                </span>
+                              </div>
+
+                              {/* Ações do dia */}
+                              {autoConfig.lastCronStats && (
+                                <>
+                                  <div className="flex justify-between">
+                                    <span className="text-slate-500">Ações hoje</span>
+                                    <span className="text-slate-700 font-medium">
+                                      {autoConfig.lastCronStats.todayActions} / {autoConfig.lastCronStats.maxActionsPerDay}
+                                    </span>
+                                  </div>
+                                  <div className="w-full bg-slate-100 rounded-full h-1.5">
+                                    <div
+                                      className="bg-primary-500 h-1.5 rounded-full transition-all"
+                                      style={{ width: `${Math.min(100, (autoConfig.lastCronStats.todayActions / autoConfig.lastCronStats.maxActionsPerDay) * 100)}%` }}
+                                    />
+                                  </div>
+                                </>
+                              )}
+
+                              {/* Último resultado */}
+                              {autoConfig.lastCronStats && (
+                                <div className="mt-2 pt-2 border-t border-slate-100">
+                                  <p className="text-slate-500 mb-1">Último processamento:</p>
+                                  <div className="grid grid-cols-2 gap-1">
+                                    {autoConfig.lastCronStats.enrolled > 0 && (
+                                      <span className="text-blue-600">{autoConfig.lastCronStats.enrolled} inscritos</span>
+                                    )}
+                                    {autoConfig.lastCronStats.success > 0 && (
+                                      <span className="text-green-600">{autoConfig.lastCronStats.success} sucesso</span>
+                                    )}
+                                    {autoConfig.lastCronStats.failed > 0 && (
+                                      <span className="text-red-600">{autoConfig.lastCronStats.failed} falhas</span>
+                                    )}
+                                    {autoConfig.lastCronStats.processed === 0 && autoConfig.lastCronStats.enrolled === 0 && (
+                                      <span className="text-slate-400 col-span-2">Nenhuma ação pendente</span>
+                                    )}
+                                  </div>
+                                </div>
+                              )}
+
+                              {/* Fila ativa */}
+                              {activeQueue && (
+                                <div className="mt-2 pt-2 border-t border-slate-100">
+                                  <p className="text-slate-500 mb-1">Fila de ligações:</p>
+                                  <div className="flex justify-between">
+                                    <span className="text-slate-700">Progresso</span>
+                                    <span className="text-green-600 font-medium">{activeQueue.completedItems}/{activeQueue.totalItems}</span>
+                                  </div>
+                                  <div className="w-full bg-slate-100 rounded-full h-1.5 mt-1">
+                                    <div
+                                      className="bg-green-500 h-1.5 rounded-full transition-all"
+                                      style={{ width: `${activeQueue.totalItems > 0 ? (activeQueue.completedItems / activeQueue.totalItems) * 100 : 0}%` }}
+                                    />
+                                  </div>
+                                  <div className="flex justify-between mt-1">
+                                    <span>{activeQueue.activeCallsCount} ligando agora</span>
+                                    {(activeQueue.failedItems || 0) > 0 && (
+                                      <span className="text-red-500">{activeQueue.failedItems} falharam</span>
+                                    )}
+                                  </div>
+                                </div>
+                              )}
+
+                              {!activeQueue && autoConfig.enabled && !autoConfig.lastCronStats && (
+                                <p className="text-slate-400 mt-2 pt-2 border-t border-slate-100">
+                                  Aguardando próximo ciclo do cron (a cada 15 min)
+                                </p>
+                              )}
+                            </div>
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  )}
                 </div>
               </div>
 
@@ -3085,67 +3323,36 @@ export default function FunilDetailPage() {
                     {formatCurrencyShort(globalMetrics.totalExpectedValue)}
                   </div>
                 )}
+                {/* Credits Pill */}
+                {!credits.loading && (
+                  <div className={`flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold ${
+                    credits.actionBalance === 0 || credits.minuteBalance === 0
+                      ? 'bg-red-50 text-red-700'
+                      : credits.actionBalance < 200 || credits.minuteBalance < 50
+                      ? 'bg-amber-50 text-amber-700'
+                      : 'bg-emerald-50 text-emerald-700'
+                  }`} title={`${credits.actionBalance} ações · ${credits.minuteBalance} minutos`}>
+                    <BoltIcon className="w-3.5 h-3.5" />
+                    {credits.actionBalance} ações · {credits.minuteBalance} min
+                  </div>
+                )}
               </div>
             </div>
 
             <div className="flex items-center gap-3">
-              {/* View Mode Switcher */}
-              <div className="flex items-center bg-slate-100 rounded-lg p-0.5">
-                <button
-                  onClick={() => setViewMode('kanban')}
-                  className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-sm font-medium transition-all ${
-                    viewMode === 'kanban'
-                      ? 'bg-white text-primary-700 shadow-sm'
-                      : 'text-slate-500 hover:text-slate-700'
-                  }`}
-                  title="Kanban"
+              {/* View Mode Dropdown */}
+              <div className="relative">
+                <select
+                  value={viewMode}
+                  onChange={e => setViewMode(e.target.value as ViewMode)}
+                  className="appearance-none bg-white rounded-lg ring-1 ring-slate-200 pl-3 pr-8 py-1.5 text-sm font-medium text-slate-700 cursor-pointer hover:ring-primary-300 transition-all focus:outline-none focus:ring-2 focus:ring-primary-500"
                 >
-                  <Squares2X2Icon className="w-4 h-4" />
-                  <span className="hidden xl:inline">Kanban</span>
-                </button>
-                <button
-                  onClick={() => setViewMode('table')}
-                  className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-sm font-medium transition-all ${
-                    viewMode === 'table'
-                      ? 'bg-white text-primary-700 shadow-sm'
-                      : 'text-slate-500 hover:text-slate-700'
-                  }`}
-                  title="Contatos de Hoje"
-                >
-                  <TableCellsIcon className="w-4 h-4" />
-                  <span className="hidden xl:inline">Hoje</span>
-                  {contactsToday.length > 0 && (
-                    <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-bold leading-none ${
-                      viewMode === 'table' ? 'bg-primary-100 text-primary-700' : 'bg-red-100 text-red-600'
-                    }`}>
-                      {contactsToday.length}
-                    </span>
-                  )}
-                </button>
-                <button
-                  onClick={() => setViewMode('calendar')}
-                  className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-sm font-medium transition-all ${
-                    viewMode === 'calendar'
-                      ? 'bg-white text-primary-700 shadow-sm'
-                      : 'text-slate-500 hover:text-slate-700'
-                  }`}
-                  title="Calendário"
-                >
-                  <CalendarDaysIcon className="w-4 h-4" />
-                  <span className="hidden xl:inline">Calendário</span>
-                </button>
-                <button
-                  onClick={() => setViewMode('activity')}
-                  className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-sm font-medium transition-all ${
-                    viewMode === 'activity'
-                      ? 'bg-white text-primary-700 shadow-sm'
-                      : 'text-slate-500 hover:text-slate-700'
-                  }`}
-                  title="Log de Atividade"
-                >
-                  <ClockIcon className="w-4 h-4" />
-                  <span className="hidden xl:inline">Log</span>
-                </button>
+                  <option value="kanban">Kanban</option>
+                  <option value="table">Hoje{contactsToday.length > 0 ? ` (${contactsToday.length})` : ''}</option>
+                  <option value="calendar">Calendario</option>
+                  <option value="activity">Log</option>
+                </select>
+                <ChevronDownIcon className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
               </div>
 
               {/* Search, Period Filters, and Export */}
@@ -3198,11 +3405,6 @@ export default function FunilDetailPage() {
 
                   {/* Advanced Filters Panel */}
                   {showAdvancedFilters && (
-                    <>
-                      <div
-                        className="fixed inset-0 z-40"
-                        onClick={() => setShowAdvancedFilters(false)}
-                      />
                       <div className="absolute right-0 top-12 z-50 w-[420px] bg-white rounded-2xl shadow-2xl border border-slate-200 overflow-hidden animate-in fade-in slide-in-from-top-2 duration-200">
                         {/* Panel Header */}
                         <div className="p-4 border-b border-slate-100 bg-gradient-to-r from-primary-50 to-purple-50">
@@ -3489,56 +3691,10 @@ export default function FunilDetailPage() {
                           </div>
                         </div>
                       </div>
-                    </>
                   )}
                 </div>
 
-                {/* Period Filter */}
-                <div className="flex items-center gap-1.5">
-                  <input
-                    type="date"
-                    value={filterDateFrom}
-                    onChange={(e) => setFilterDateFrom(e.target.value)}
-                    className="px-2 py-2 border border-slate-200 rounded-xl text-xs bg-white text-slate-600 focus:outline-none focus:ring-2 focus:ring-primary-500/20"
-                    title="Data início"
-                  />
-                  <span className="text-xs text-slate-400">a</span>
-                  <input
-                    type="date"
-                    value={filterDateTo}
-                    onChange={(e) => setFilterDateTo(e.target.value)}
-                    className="px-2 py-2 border border-slate-200 rounded-xl text-xs bg-white text-slate-600 focus:outline-none focus:ring-2 focus:ring-primary-500/20"
-                    title="Data fim"
-                  />
-                </div>
-
-                {/* Export Buttons */}
-                <button
-                  onClick={handleExportExcel}
-                  disabled={exportingExcel || filteredClients.length === 0}
-                  className="flex items-center gap-1.5 px-3 py-2 bg-green-600 text-white text-xs font-medium rounded-xl hover:bg-green-700 disabled:opacity-50 transition-colors"
-                  title="Exportar Excel"
-                >
-                  {exportingExcel ? (
-                    <div className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                  ) : (
-                    <ArrowDownTrayIcon className="w-3.5 h-3.5" />
-                  )}
-                  <span className="hidden lg:inline">Excel</span>
-                </button>
-                <button
-                  onClick={handleGeneratePdf}
-                  disabled={exportingPdf || filteredClients.length === 0}
-                  className="flex items-center gap-1.5 px-3 py-2 bg-red-600 text-white text-xs font-medium rounded-xl hover:bg-red-700 disabled:opacity-50 transition-colors"
-                  title="Gerar Resumo PDF"
-                >
-                  {exportingPdf ? (
-                    <div className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                  ) : (
-                    <DocumentTextIcon className="w-3.5 h-3.5" />
-                  )}
-                  <span className="hidden lg:inline">PDF</span>
-                </button>
+                {/* Period filter and export buttons moved to Report Modal (menu + > Gerar Relatório) */}
               </div>
 
               {/* Actions Menu */}
@@ -3655,10 +3811,26 @@ export default function FunilDetailPage() {
                         </button>
                       )}
 
+                      <button
+                        onClick={() => {
+                          setShowReportModal(true)
+                          setActionsMenuOpen(false)
+                        }}
+                        className="w-full flex items-center gap-3 px-4 py-2.5 hover:bg-slate-50 transition-colors text-left"
+                      >
+                        <div className="w-8 h-8 rounded-lg bg-blue-100 flex items-center justify-center">
+                          <ChartBarIcon className="w-4 h-4 text-blue-600" />
+                        </div>
+                        <div>
+                          <p className="text-sm font-medium text-slate-800">Gerar Relatório</p>
+                          <p className="text-xs text-slate-500">Excel, PDF e filtros por período</p>
+                        </div>
+                      </button>
+
                       <div className="my-2 border-t border-slate-100" />
 
                       <Link
-                        href="/cadencia"
+                        href={`/cadencia?funnelId=${funnelId}`}
                         onClick={() => setActionsMenuOpen(false)}
                         className="w-full flex items-center gap-3 px-4 py-2.5 hover:bg-slate-50 transition-colors text-left"
                       >
@@ -4661,51 +4833,83 @@ export default function FunilDetailPage() {
                                           Prazo: {stage.maxDays}d
                                         </span>
                                       )}
-                                      {/* Sort dropdown */}
-                                      <div className="relative ml-auto">
-                                        <button
-                                          type="button"
+                                      {/* Cadência + Sort */}
+                                      <div className="flex items-center gap-1 ml-auto">
+                                        <Link
+                                          href={`/cadencia?funnelId=${funnelId}`}
                                           className={`flex items-center gap-1 px-2 py-0.5 rounded-full transition-colors ${
-                                            sortDirection[stage.id]
+                                            cadenceSteps.some(s => s.stageId === stage.id && s.isActive)
                                               ? 'bg-white/30 text-white'
                                               : 'bg-white/10 hover:bg-white/20 text-white/80'
                                           }`}
-                                          onClick={(e) => {
-                                            e.stopPropagation()
-                                            setSortMenuOpen(sortMenuOpen === stage.id ? null : stage.id)
-                                          }}
-                                          title="Ordenar cards"
+                                          title={`Cadência: ${cadenceSteps.filter(s => s.stageId === stage.id).length} steps`}
+                                          onClick={(e) => e.stopPropagation()}
                                         >
-                                          <ChevronUpIcon className="w-3 h-3" />
-                                          <ChevronDownIcon className="w-3 h-3 -ml-1.5" />
-                                          {sortType[stage.id] === 'lastContact' ? 'Contato' : sortType[stage.id] === 'stageTime' ? 'Etapa' : 'Ordenar'}
-                                          {sortDirection[stage.id] && (sortDirection[stage.id] === 'asc' ? ' ▲' : ' ▼')}
-                                        </button>
-                                        {sortMenuOpen === stage.id && (
-                                          <div
-                                            className="absolute right-0 top-full z-50 mt-1 w-44 rounded-lg bg-white py-1 shadow-lg ring-1 ring-black/10"
-                                            onClick={(e) => e.stopPropagation()}
+                                          <SparklesIcon className="w-3 h-3" />
+                                          {cadenceSteps.filter(s => s.stageId === stage.id).length > 0 && (
+                                            <span>{cadenceSteps.filter(s => s.stageId === stage.id).length}</span>
+                                          )}
+                                        </Link>
+                                        {cadenceSteps.some(s => s.stageId === stage.id && s.isActive) && (
+                                          <button
+                                            type="button"
+                                            className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-white/10 hover:bg-white/30 text-white/80 hover:text-white transition-colors"
+                                            title="Forçar cadência desta etapa"
+                                            onClick={(e) => {
+                                              e.stopPropagation()
+                                              setForceCadenceStageId(stage.id)
+                                              setForceCadenceLimit(10)
+                                            }}
                                           >
-                                            <button
-                                              type="button"
-                                              className={`w-full px-3 py-2 text-left text-xs hover:bg-slate-50 transition-colors ${
-                                                sortType[stage.id] === 'lastContact' ? 'bg-primary-50 text-primary-700 font-medium' : 'text-slate-700'
-                                              }`}
-                                              onClick={() => handleSortStage(stage.id, 'lastContact')}
-                                            >
-                                              Por último contato {sortType[stage.id] === 'lastContact' && (sortDirection[stage.id] === 'asc' ? '▲' : '▼')}
-                                            </button>
-                                            <button
-                                              type="button"
-                                              className={`w-full px-3 py-2 text-left text-xs hover:bg-slate-50 transition-colors ${
-                                                sortType[stage.id] === 'stageTime' ? 'bg-primary-50 text-primary-700 font-medium' : 'text-slate-700'
-                                              }`}
-                                              onClick={() => handleSortStage(stage.id, 'stageTime')}
-                                            >
-                                              Por tempo na etapa {sortType[stage.id] === 'stageTime' && (sortDirection[stage.id] === 'asc' ? '▲' : '▼')}
-                                            </button>
-                                          </div>
+                                            <BoltIcon className="w-3 h-3" />
+                                          </button>
                                         )}
+                                        {/* Sort dropdown */}
+                                        <div className="relative">
+                                          <button
+                                            type="button"
+                                            className={`flex items-center gap-1 px-2 py-0.5 rounded-full transition-colors ${
+                                              sortDirection[stage.id]
+                                                ? 'bg-white/30 text-white'
+                                                : 'bg-white/10 hover:bg-white/20 text-white/80'
+                                            }`}
+                                            onClick={(e) => {
+                                              e.stopPropagation()
+                                              setSortMenuOpen(sortMenuOpen === stage.id ? null : stage.id)
+                                            }}
+                                            title="Ordenar cards"
+                                          >
+                                            <ChevronUpIcon className="w-3 h-3" />
+                                            <ChevronDownIcon className="w-3 h-3 -ml-1.5" />
+                                            {sortType[stage.id] === 'lastContact' ? 'Contato' : sortType[stage.id] === 'stageTime' ? 'Etapa' : 'Ordenar'}
+                                            {sortDirection[stage.id] && (sortDirection[stage.id] === 'asc' ? ' ▲' : ' ▼')}
+                                          </button>
+                                          {sortMenuOpen === stage.id && (
+                                            <div
+                                              className="absolute right-0 top-full z-50 mt-1 w-44 rounded-lg bg-white py-1 shadow-lg ring-1 ring-black/10"
+                                              onClick={(e) => e.stopPropagation()}
+                                            >
+                                              <button
+                                                type="button"
+                                                className={`w-full px-3 py-2 text-left text-xs hover:bg-slate-50 transition-colors ${
+                                                  sortType[stage.id] === 'lastContact' ? 'bg-primary-50 text-primary-700 font-medium' : 'text-slate-700'
+                                                }`}
+                                                onClick={() => handleSortStage(stage.id, 'lastContact')}
+                                              >
+                                                Por último contato {sortType[stage.id] === 'lastContact' && (sortDirection[stage.id] === 'asc' ? '▲' : '▼')}
+                                              </button>
+                                              <button
+                                                type="button"
+                                                className={`w-full px-3 py-2 text-left text-xs hover:bg-slate-50 transition-colors ${
+                                                  sortType[stage.id] === 'stageTime' ? 'bg-primary-50 text-primary-700 font-medium' : 'text-slate-700'
+                                                }`}
+                                                onClick={() => handleSortStage(stage.id, 'stageTime')}
+                                              >
+                                                Por tempo na etapa {sortType[stage.id] === 'stageTime' && (sortDirection[stage.id] === 'asc' ? '▲' : '▼')}
+                                              </button>
+                                            </div>
+                                          )}
+                                        </div>
                                       </div>
                                     </div>
                                   </div>
@@ -4740,6 +4944,7 @@ export default function FunilDetailPage() {
                                               proposalData={proposalsByClient[client.id]}
                                               icpColor={client.icpProfileId ? icpMap[client.icpProfileId]?.color : undefined}
                                               icpName={client.icpProfileId ? icpMap[client.icpProfileId]?.name : undefined}
+                                              cadenceStepName={getCurrentCadenceStep(client, stage.id)?.name}
                                               onSelect={bulkSelectMode ? () => toggleBulkSelect(client.id) : handleSelectClient}
                                             />
                                           </div>
@@ -4832,51 +5037,83 @@ export default function FunilDetailPage() {
                                 Prazo: {stage.maxDays}d
                               </span>
                             )}
-                            {/* Sort dropdown */}
-                            <div className="relative ml-auto">
-                              <button
-                                type="button"
+                            {/* Cadência + Sort */}
+                            <div className="flex items-center gap-1 ml-auto">
+                              <Link
+                                href={`/cadencia?funnelId=${funnelId}`}
                                 className={`flex items-center gap-1 px-2 py-0.5 rounded-full transition-colors ${
-                                  sortDirection[stage.id]
+                                  cadenceSteps.some(s => s.stageId === stage.id && s.isActive)
                                     ? 'bg-white/30 text-white'
                                     : 'bg-white/10 hover:bg-white/20 text-white/80'
                                 }`}
-                                onClick={(e) => {
-                                  e.stopPropagation()
-                                  setSortMenuOpen(sortMenuOpen === stage.id ? null : stage.id)
-                                }}
-                                title="Ordenar cards"
+                                title={`Cadência: ${cadenceSteps.filter(s => s.stageId === stage.id).length} steps`}
+                                onClick={(e) => e.stopPropagation()}
                               >
-                                <ChevronUpIcon className="w-3 h-3" />
-                                <ChevronDownIcon className="w-3 h-3 -ml-1.5" />
-                                {sortType[stage.id] === 'lastContact' ? 'Contato' : sortType[stage.id] === 'stageTime' ? 'Etapa' : 'Ordenar'}
-                                {sortDirection[stage.id] && (sortDirection[stage.id] === 'asc' ? ' ▲' : ' ▼')}
-                              </button>
-                              {sortMenuOpen === stage.id && (
-                                <div
-                                  className="absolute right-0 top-full z-50 mt-1 w-44 rounded-lg bg-white py-1 shadow-lg ring-1 ring-black/10"
-                                  onClick={(e) => e.stopPropagation()}
+                                <SparklesIcon className="w-3 h-3" />
+                                {cadenceSteps.filter(s => s.stageId === stage.id).length > 0 && (
+                                  <span>{cadenceSteps.filter(s => s.stageId === stage.id).length}</span>
+                                )}
+                              </Link>
+                              {cadenceSteps.some(s => s.stageId === stage.id && s.isActive) && (
+                                <button
+                                  type="button"
+                                  className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-white/10 hover:bg-white/30 text-white/80 hover:text-white transition-colors"
+                                  title="Forçar cadência desta etapa"
+                                  onClick={(e) => {
+                                    e.stopPropagation()
+                                    setForceCadenceStageId(stage.id)
+                                    setForceCadenceLimit(10)
+                                  }}
                                 >
-                                  <button
-                                    type="button"
-                                    className={`w-full px-3 py-2 text-left text-xs hover:bg-slate-50 transition-colors ${
-                                      sortType[stage.id] === 'lastContact' ? 'bg-primary-50 text-primary-700 font-medium' : 'text-slate-700'
-                                    }`}
-                                    onClick={() => handleSortStage(stage.id, 'lastContact')}
-                                  >
-                                    Por último contato {sortType[stage.id] === 'lastContact' && (sortDirection[stage.id] === 'asc' ? '▲' : '▼')}
-                                  </button>
-                                  <button
-                                    type="button"
-                                    className={`w-full px-3 py-2 text-left text-xs hover:bg-slate-50 transition-colors ${
-                                      sortType[stage.id] === 'stageTime' ? 'bg-primary-50 text-primary-700 font-medium' : 'text-slate-700'
-                                    }`}
-                                    onClick={() => handleSortStage(stage.id, 'stageTime')}
-                                  >
-                                    Por tempo na etapa {sortType[stage.id] === 'stageTime' && (sortDirection[stage.id] === 'asc' ? '▲' : '▼')}
-                                  </button>
-                                </div>
+                                  <BoltIcon className="w-3 h-3" />
+                                </button>
                               )}
+                              {/* Sort dropdown */}
+                              <div className="relative">
+                                <button
+                                  type="button"
+                                  className={`flex items-center gap-1 px-2 py-0.5 rounded-full transition-colors ${
+                                    sortDirection[stage.id]
+                                      ? 'bg-white/30 text-white'
+                                      : 'bg-white/10 hover:bg-white/20 text-white/80'
+                                  }`}
+                                  onClick={(e) => {
+                                    e.stopPropagation()
+                                    setSortMenuOpen(sortMenuOpen === stage.id ? null : stage.id)
+                                  }}
+                                  title="Ordenar cards"
+                                >
+                                  <ChevronUpIcon className="w-3 h-3" />
+                                  <ChevronDownIcon className="w-3 h-3 -ml-1.5" />
+                                  {sortType[stage.id] === 'lastContact' ? 'Contato' : sortType[stage.id] === 'stageTime' ? 'Etapa' : 'Ordenar'}
+                                  {sortDirection[stage.id] && (sortDirection[stage.id] === 'asc' ? ' ▲' : ' ▼')}
+                                </button>
+                                {sortMenuOpen === stage.id && (
+                                  <div
+                                    className="absolute right-0 top-full z-50 mt-1 w-44 rounded-lg bg-white py-1 shadow-lg ring-1 ring-black/10"
+                                    onClick={(e) => e.stopPropagation()}
+                                  >
+                                    <button
+                                      type="button"
+                                      className={`w-full px-3 py-2 text-left text-xs hover:bg-slate-50 transition-colors ${
+                                        sortType[stage.id] === 'lastContact' ? 'bg-primary-50 text-primary-700 font-medium' : 'text-slate-700'
+                                      }`}
+                                      onClick={() => handleSortStage(stage.id, 'lastContact')}
+                                    >
+                                      Por último contato {sortType[stage.id] === 'lastContact' && (sortDirection[stage.id] === 'asc' ? '▲' : '▼')}
+                                    </button>
+                                    <button
+                                      type="button"
+                                      className={`w-full px-3 py-2 text-left text-xs hover:bg-slate-50 transition-colors ${
+                                        sortType[stage.id] === 'stageTime' ? 'bg-primary-50 text-primary-700 font-medium' : 'text-slate-700'
+                                      }`}
+                                      onClick={() => handleSortStage(stage.id, 'stageTime')}
+                                    >
+                                      Por tempo na etapa {sortType[stage.id] === 'stageTime' && (sortDirection[stage.id] === 'asc' ? '▲' : '▼')}
+                                    </button>
+                                  </div>
+                                )}
+                              </div>
                             </div>
                           </div>
                         </div>
@@ -4902,6 +5139,7 @@ export default function FunilDetailPage() {
                                 proposalData={proposalsByClient[client.id]}
                                 icpColor={client.icpProfileId ? icpMap[client.icpProfileId]?.color : undefined}
                                 icpName={client.icpProfileId ? icpMap[client.icpProfileId]?.name : undefined}
+                                cadenceStepName={getCurrentCadenceStep(client, stage.id)?.name}
                                 onSelect={handleSelectClient}
                               />
                             )
@@ -7631,6 +7869,142 @@ export default function FunilDetailPage() {
         </div>
       )}
 
+      {/* Overlay para fechar filtros avançados (fora do sticky header para evitar stacking context) */}
+      {showAdvancedFilters && (
+        <div
+          className="fixed inset-0 z-30"
+          onClick={() => setShowAdvancedFilters(false)}
+        />
+      )}
+
+      {/* Modal de Relatório */}
+      {showReportModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center">
+          <div
+            className="absolute inset-0 bg-black/40 backdrop-blur-sm"
+            onClick={() => setShowReportModal(false)}
+          />
+          <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-md mx-4 p-6 animate-in fade-in zoom-in-95 duration-200">
+            <div className="flex items-center justify-between mb-6">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-blue-100 flex items-center justify-center">
+                  <ChartBarIcon className="w-5 h-5 text-blue-600" />
+                </div>
+                <div>
+                  <h3 className="text-lg font-semibold text-slate-800">Gerar Relatório</h3>
+                  <p className="text-xs text-slate-500">Selecione o período e formato</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowReportModal(false)}
+                className="p-1.5 hover:bg-slate-100 rounded-lg transition-colors"
+              >
+                <XMarkIcon className="w-5 h-5 text-slate-400" />
+              </button>
+            </div>
+
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1.5">Período</label>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="date"
+                    value={reportDateFrom}
+                    onChange={(e) => setReportDateFrom(e.target.value)}
+                    className="flex-1 px-3 py-2 border border-slate-200 rounded-xl text-sm bg-white text-slate-600 focus:outline-none focus:ring-2 focus:ring-primary-500/20"
+                    placeholder="Data início"
+                  />
+                  <span className="text-sm text-slate-400">a</span>
+                  <input
+                    type="date"
+                    value={reportDateTo}
+                    onChange={(e) => setReportDateTo(e.target.value)}
+                    className="flex-1 px-3 py-2 border border-slate-200 rounded-xl text-sm bg-white text-slate-600 focus:outline-none focus:ring-2 focus:ring-primary-500/20"
+                    placeholder="Data fim"
+                  />
+                </div>
+                <p className="text-xs text-slate-400 mt-1">Deixe em branco para exportar todos os contatos</p>
+              </div>
+
+              <div className="pt-2 space-y-2">
+                <button
+                  onClick={handleExportExcel}
+                  disabled={exportingExcel || filteredClients.length === 0}
+                  className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-green-600 text-white text-sm font-medium rounded-xl hover:bg-green-700 disabled:opacity-50 transition-colors"
+                >
+                  {exportingExcel ? (
+                    <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                  ) : (
+                    <ArrowDownTrayIcon className="w-4 h-4" />
+                  )}
+                  Exportar Excel
+                </button>
+                <button
+                  onClick={handleGeneratePdf}
+                  disabled={exportingPdf || filteredClients.length === 0}
+                  className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-red-600 text-white text-sm font-medium rounded-xl hover:bg-red-700 disabled:opacity-50 transition-colors"
+                >
+                  {exportingPdf ? (
+                    <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                  ) : (
+                    <DocumentTextIcon className="w-4 h-4" />
+                  )}
+                  Gerar Resumo PDF
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal de Forçar Cadência */}
+      {forceCadenceStageId && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center">
+          <div
+            className="absolute inset-0 bg-black/40 backdrop-blur-sm"
+            onClick={() => !forcingCadence && setForceCadenceStageId(null)}
+          />
+          <div className="relative w-full max-w-sm rounded-2xl bg-white p-6 shadow-xl">
+            <h3 className="text-lg font-semibold text-slate-900">Forçar Cadência</h3>
+            <p className="mt-1 text-sm text-slate-500">
+              Executar a próxima ação de cadência para os contatos mais antigos desta etapa.
+            </p>
+            <div className="mt-4">
+              <label className="block text-sm font-medium text-slate-700">
+                Quantos contatos?
+              </label>
+              <input
+                type="number"
+                min={1}
+                max={500}
+                value={forceCadenceLimit}
+                onChange={(e) => setForceCadenceLimit(Math.max(1, parseInt(e.target.value) || 1))}
+                className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
+                disabled={forcingCadence}
+              />
+            </div>
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                type="button"
+                className="rounded-lg px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-100 transition-colors"
+                onClick={() => setForceCadenceStageId(null)}
+                disabled={forcingCadence}
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                className="rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700 transition-colors disabled:opacity-50"
+                onClick={handleForceCadence}
+                disabled={forcingCadence}
+              >
+                {forcingCadence ? 'Executando...' : 'Executar'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Modal de Novo Contato */}
       {showNewContactModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center">
@@ -7841,8 +8215,61 @@ export default function FunilDetailPage() {
                   />
                 </div>
 
+                {/* Sócios */}
                 <div className="sm:col-span-2">
-                  <label className="block text-sm font-medium text-slate-700 mb-1.5">Descrição</label>
+                  <label className="block text-sm font-medium text-slate-700 mb-1.5">Socios</label>
+                  {newContactPartners.length > 0 && (
+                    <div className="flex flex-wrap gap-2 mb-2">
+                      {newContactPartners.map((p, i) => (
+                        <span key={i} className="inline-flex items-center gap-1.5 bg-primary-50 text-primary-700 px-3 py-1.5 rounded-full text-sm font-medium">
+                          {p}
+                          <button
+                            type="button"
+                            onClick={() => setNewContactPartners(prev => prev.filter((_, idx) => idx !== i))}
+                            className="text-primary-400 hover:text-red-500 transition-colors"
+                          >
+                            &times;
+                          </button>
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      value={newPartnerInput}
+                      onChange={(e) => setNewPartnerInput(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault()
+                          const name = newPartnerInput.trim()
+                          if (name) {
+                            setNewContactPartners(prev => [...prev, name])
+                            setNewPartnerInput('')
+                          }
+                        }
+                      }}
+                      placeholder="Nome do socio e pressione Enter ou clique +"
+                      className="flex-1 px-4 py-2.5 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-primary-500/20 focus:border-primary-400 transition-all"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const name = newPartnerInput.trim()
+                        if (name) {
+                          setNewContactPartners(prev => [...prev, name])
+                          setNewPartnerInput('')
+                        }
+                      }}
+                      className="px-3.5 py-2.5 bg-primary-50 text-primary-600 rounded-xl text-sm font-bold hover:bg-primary-100 transition-colors"
+                    >
+                      +
+                    </button>
+                  </div>
+                </div>
+
+                <div className="sm:col-span-2">
+                  <label className="block text-sm font-medium text-slate-700 mb-1.5">Descricao</label>
                   <textarea
                     value={newContactForm.description}
                     onChange={(e) => setNewContactForm({ ...newContactForm, description: e.target.value })}

@@ -8,6 +8,7 @@
 
 import { getAdminDb } from './firebaseAdmin'
 import { makeVapiCall, getActiveProspects, parseMultiplePhones, getVapiCallDetails, classifyCallResult } from './callRouting'
+import { canMakeCall, deductAction } from './credits'
 import {
   CallQueue,
   CallQueueItem,
@@ -113,11 +114,13 @@ export async function createCadenceCallQueue(options: {
     company?: string
     industry?: string
     partners?: string
+    stageId?: string
     cadenceStepId: string
     cadenceOverrides?: { systemPrompt?: string; firstMessage?: string }
   }>
   maxConcurrent?: number
   orgId: string
+  callStaggerDelayMs?: number
 }): Promise<{ queueId: string; totalItems: number }> {
   const db = getAdminDb()
   const maxConcurrent = options.maxConcurrent || DEFAULT_MAX_CONCURRENT
@@ -130,7 +133,7 @@ export async function createCadenceCallQueue(options: {
   const queueRef = db.collection(COLLECTION_QUEUE).doc()
   const queueId = queueRef.id
 
-  const queue: Omit<CallQueue, 'id'> & { orgId: string } = {
+  const queue: Omit<CallQueue, 'id'> & { orgId: string; callStaggerDelayMs?: number; lastCallStartedAt?: string } = {
     status: 'running',
     type: 'cadence',
     maxConcurrent,
@@ -141,6 +144,7 @@ export async function createCadenceCallQueue(options: {
     createdAt: now,
     updatedAt: now,
     orgId: options.orgId,
+    ...(options.callStaggerDelayMs ? { callStaggerDelayMs: options.callStaggerDelayMs } : {}),
   }
 
   await queueRef.set({ ...queue, id: queueId })
@@ -165,6 +169,7 @@ export async function createCadenceCallQueue(options: {
         position: i,
         createdAt: now,
         updatedAt: now,
+        ...(c.stageId && { stageId: c.stageId }),
         cadenceStepId: c.cadenceStepId,
         ...(c.cadenceOverrides && { cadenceOverrides: c.cadenceOverrides }),
       }
@@ -387,10 +392,31 @@ export async function processQueue(queueId: string): Promise<{
     return { started: 0, errors: 0, remaining: pendingCount, activeCalls }
   }
 
+  // Stagger delay: se configurado, iniciar no máximo 1 ligação por invocação
+  // e respeitar o intervalo desde a última ligação iniciada
+  const staggerDelay = (queue as unknown as Record<string, unknown>).callStaggerDelayMs as number | undefined
+  const lastCallStarted = (queue as unknown as Record<string, unknown>).lastCallStartedAt as string | undefined
+
+  let maxToStart = slotsAvailable
+  if (staggerDelay && staggerDelay > 0) {
+    // Com stagger, iniciar no máximo 1 por invocação
+    maxToStart = 1
+    // Verificar se já passou tempo suficiente desde a última ligação
+    // MAS: se não há nenhuma ligação ativa, ignorar stagger (fila pode estar travada)
+    if (lastCallStarted && activeCalls > 0) {
+      const elapsed = Date.now() - new Date(lastCallStarted).getTime()
+      if (elapsed < staggerDelay) {
+        const pendingCount = allItems.filter(i => i.status === 'pending').length
+        console.log(`[CALL-QUEUE] Stagger delay: aguardando ${staggerDelay - elapsed}ms (${elapsed}ms desde última)`)
+        return { started: 0, errors: 0, remaining: pendingCount, activeCalls }
+      }
+    }
+  }
+
   // Pegar próximos itens pendentes (já ordenados por position)
   const pendingItems = allItems
     .filter(i => i.status === 'pending')
-    .slice(0, slotsAvailable)
+    .slice(0, maxToStart)
 
   if (pendingItems.length === 0) {
     // Verificar se a fila acabou
@@ -406,9 +432,65 @@ export async function processQueue(queueId: string): Promise<{
   let started = 0
   let errors = 0
 
+  // Carregar configs de etapa para validação de horário (se for fila de cadência)
+  let stageConfigs: Map<string, { callStartHour?: string; callEndHour?: string }> | null = null
+  if (queue.type === 'cadence' && orgId) {
+    try {
+      const stagesSnap = await db.collection('organizations').doc(orgId).collection('funnelStages').get()
+      stageConfigs = new Map()
+      for (const doc of stagesSnap.docs) {
+        const data = doc.data()
+        if (data.automationConfig) {
+          stageConfigs.set(doc.id, {
+            callStartHour: data.automationConfig.callStartHour,
+            callEndHour: data.automationConfig.callEndHour,
+          })
+        }
+      }
+    } catch { /* ignore, proceed without stage validation */ }
+  }
+
   // Disparar ligações para cada item pendente
   for (const item of pendingItems) {
     const now = new Date().toISOString()
+
+    // Verificar créditos antes de cada ligação (ação + minutos)
+    if (orgId) {
+      const creditCheck = await canMakeCall(orgId)
+      if (!creditCheck.allowed) {
+        console.log(`[CALL-QUEUE] Créditos insuficientes para ${item.name}: ${creditCheck.reason}`)
+        await db.collection(COLLECTION_QUEUE_ITEMS).doc(item.id).update({
+          status: 'cancelled' as CallQueueItemStatus,
+          error: creditCheck.reason || 'Créditos insuficientes',
+          updatedAt: now,
+          endedAt: now,
+        })
+        continue
+      }
+      // Debitar 1 ação antes de iniciar a ligação
+      await deductAction(orgId, 'call', item.clientId, `Ligação fila: ${item.name}`)
+    }
+
+    // Per-stage validation: verificar se a etapa ainda está dentro do horário
+    const itemStageId = (item as unknown as Record<string, unknown>).stageId as string | undefined
+    if (itemStageId && stageConfigs) {
+      const stageConf = stageConfigs.get(itemStageId)
+      if (stageConf && stageConf.callStartHour && stageConf.callEndHour) {
+        const nowDate = new Date()
+        const currentTime = `${String(nowDate.getHours()).padStart(2, '0')}:${String(nowDate.getMinutes()).padStart(2, '0')}`
+        if (currentTime < stageConf.callStartHour || currentTime > stageConf.callEndHour) {
+          // Fora do horário — cancelar este item
+          await db.collection(COLLECTION_QUEUE_ITEMS).doc(item.id).update({
+            status: 'cancelled' as CallQueueItemStatus,
+            error: `Janela de horário encerrada (${stageConf.callStartHour}-${stageConf.callEndHour})`,
+            updatedAt: now,
+            endedAt: now,
+          })
+          console.log(`[CALL-QUEUE] ${item.name} cancelado: fora do horário da etapa (${currentTime} vs ${stageConf.callStartHour}-${stageConf.callEndHour})`)
+          continue
+        }
+      }
+    }
 
     try {
       // Marcar como "calling" antes de fazer a chamada
@@ -453,11 +535,16 @@ export async function processQueue(queueId: string): Promise<{
   }
 
   // Atualizar contadores na fila
-  await db.collection(COLLECTION_QUEUE).doc(queueId).update({
+  const queueUpdate: Record<string, unknown> = {
     activeCallsCount: activeCalls,
     failedItems: (queue.failedItems || 0) + errors,
     updatedAt: new Date().toISOString(),
-  })
+  }
+  // Registrar timestamp da última ligação iniciada (para stagger delay)
+  if (started > 0) {
+    queueUpdate.lastCallStartedAt = new Date().toISOString()
+  }
+  await db.collection(COLLECTION_QUEUE).doc(queueId).update(queueUpdate)
 
   const remaining = allItems.filter(i => i.status === 'pending').length - pendingItems.length + errors
   console.log(`[CALL-QUEUE] Processamento: ${started} iniciadas, ${errors} erros, ${remaining} pendentes, ${activeCalls} ativas`)

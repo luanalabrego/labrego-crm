@@ -90,6 +90,10 @@ export type CadenceExhaustedAction = 'keep' | 'move' | 'notify'
 export interface StageAutomationConfig {
   cadenceExhaustedAction: CadenceExhaustedAction
   cadenceExhaustedTargetStageId?: string
+  // Per-stage call scheduling (overrides org-level when set)
+  callStartHour?: string    // e.g. "09:00"
+  callEndHour?: string      // e.g. "18:00"
+  maxCallsPerDay?: number   // e.g. 200
 }
 
 export interface AutomationConfig {
@@ -101,6 +105,7 @@ export interface AutomationConfig {
   maxActionsPerDay: number
   maxConcurrentCalls: number
   maxCallsPerDay: number
+  callStaggerDelayMs?: number // Delay between consecutive calls (default: 10000 = 10s)
 }
 
 export const DEFAULT_AUTOMATION_CONFIG: AutomationConfig = {

@@ -139,6 +139,7 @@ type Cliente = {
   createdAt?: string
   updatedAt?: string
   lastFollowUpAt?: string
+  lastCadenceActionAt?: string
   needsDetail?: string
   scheduledReturn?: string // Data agendada para retorno
   partners?: string // Lista de sócios separados por vírgula
@@ -206,6 +207,7 @@ type KanbanCardProps = {
   proposalData?: { total: number; status: string; count: number }
   icpColor?: string
   icpName?: string
+  cadenceStepName?: string
   onSelect: (client: Cliente) => void
 }
 
@@ -221,23 +223,15 @@ export const KanbanCard = memo(function KanbanCard({
   proposalData,
   icpColor,
   icpName,
+  cadenceStepName,
   onSelect,
 }: KanbanCardProps) {
-  // Compute last activity = most recent of lastFollowUpAt and updatedAt
-  // Only consider updatedAt if it's different from createdAt (i.e. an actual update happened)
+  // Último registro = lastFollowUpAt ou lastCadenceActionAt (interações reais)
+  // Não usa updatedAt/funnelStageUpdatedAt pois são operações de sistema
   const lastActivityDate = (() => {
     const candidates: string[] = []
     if (lastContactDate) candidates.push(lastContactDate)
-    // Only use updatedAt if it differs from createdAt by more than 1 minute (real update vs import)
-    if (client.updatedAt && client.createdAt) {
-      const updatedMs = new Date(client.updatedAt).getTime()
-      const createdMs = new Date(client.createdAt).getTime()
-      if (!isNaN(updatedMs) && !isNaN(createdMs) && Math.abs(updatedMs - createdMs) > 60000) {
-        candidates.push(client.updatedAt)
-      }
-    } else if (client.updatedAt && !client.createdAt) {
-      candidates.push(client.updatedAt)
-    }
+    if (client.lastCadenceActionAt) candidates.push(client.lastCadenceActionAt)
     if (candidates.length === 0) return null
     return candidates.reduce((latest, d) => {
       const t = new Date(d).getTime()
@@ -305,6 +299,14 @@ export const KanbanCard = memo(function KanbanCard({
                 style={{ backgroundColor: icpColor }}
                 title={icpName ? `ICP: ${icpName}` : 'ICP'}
               />
+            )}
+            {cadenceStepName && (
+              <span
+                className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-violet-100 text-violet-700 border border-violet-200 truncate max-w-[100px]"
+                title={`Cadência: ${cadenceStepName}`}
+              >
+                {cadenceStepName}
+              </span>
             )}
             <div className="flex-1" />
             {scheduledReturnInfo && (
@@ -385,32 +387,33 @@ export const KanbanCard = memo(function KanbanCard({
             </div>
           )}
 
-          {/* Tracking: Days in stage + Last contact + First contact */}
+          {/* Tracking: Days in stage + Last activity + First contact */}
           <div className="flex items-center gap-2 mt-2">
-            {firstContactDate ? (
-              <span
-                className="flex items-center gap-0.5 text-[11px] text-emerald-600 font-medium"
-                title={`Primeiro contato: ${formatFirstContactFull(client.firstContactAt)}`}
-              >
-                <PhoneIcon className="w-3 h-3" />
-                {firstContactDate}
-              </span>
-            ) : daysInStage !== null ? (
+            {daysInStage !== null && (
               <span className={`flex items-center gap-0.5 text-[11px] ${
                 isOverdue ? 'text-red-600 font-medium' : 'text-slate-500'
               }`} title="Tempo na etapa">
                 <FunnelIcon className="w-3 h-3" />
                 {daysInStage}d
               </span>
-            ) : null}
+            )}
             {lastActivityDate && (
               <span className={`flex items-center gap-0.5 text-[11px] ${
                 daysSinceLastActivity !== null && daysSinceLastActivity > 7
                   ? 'text-orange-600 font-medium'
                   : 'text-slate-400'
-              }`} title="Última atividade">
+              }`} title="Último registro">
                 <ClockIcon className="w-3 h-3" />
                 {timeSinceActivity}
+              </span>
+            )}
+            {firstContactDate && (
+              <span
+                className="flex items-center gap-0.5 text-[11px] text-emerald-600 font-medium"
+                title={`Primeiro contato: ${formatFirstContactFull(client.firstContactAt)}`}
+              >
+                <PhoneIcon className="w-3 h-3" />
+                {firstContactDate}
               </span>
             )}
           </div>
@@ -619,7 +622,7 @@ export const TableRow = memo(function TableRow({
   }, [menuOpen])
 
   return (
-    <tr className="hover:bg-slate-50/50 transition-colors">
+    <tr className="hover:bg-slate-50/50 transition-colors cursor-pointer" onClick={() => onSelect(contact)}>
       <td className="px-4 py-3">
         <div className="flex items-center gap-3">
           {contact.photoUrl ? (

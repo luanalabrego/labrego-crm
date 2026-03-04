@@ -52,7 +52,7 @@ export async function POST(req: NextRequest) {
   if (result instanceof NextResponse) return result
 
   try {
-    const { orgId, amount, description } = await req.json()
+    const { orgId, amount, description, creditType } = await req.json()
     if (!orgId || typeof amount !== 'number' || amount === 0) {
       return NextResponse.json({ error: 'missing orgId or invalid amount' }, { status: 400 })
     }
@@ -60,6 +60,7 @@ export async function POST(req: NextRequest) {
     await addCredits(
       orgId,
       amount,
+      (creditType === 'actions' ? 'actions' : 'minutes') as 'minutes' | 'actions',
       'adjustment',
       description || (amount > 0 ? 'Creditos adicionados via Super Admin' : 'Creditos removidos via Super Admin'),
       result

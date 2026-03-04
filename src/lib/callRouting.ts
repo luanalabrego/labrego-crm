@@ -1119,10 +1119,15 @@ export async function addLog(
   source = 'prospeccao-voz'
 ): Promise<void> {
   const db = getAdminDb()
+  const now = new Date().toISOString()
   await db.collection('clients').doc(clientId).collection('logs').add({
     message,
     source,
-    createdAt: new Date().toISOString(),
+    createdAt: now,
+  })
+  // Atualizar lastFollowUpAt para refletir atividade recente no card
+  await db.collection('clients').doc(clientId).update({
+    lastFollowUpAt: now,
   })
 }
 

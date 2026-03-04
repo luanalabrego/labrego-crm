@@ -1,6 +1,7 @@
 'use client'
 
-import { useEffect, useState, useCallback, useMemo } from 'react'
+import { useEffect, useState, useCallback, useMemo, Suspense } from 'react'
+import { useSearchParams } from 'next/navigation'
 import {
   collection,
   doc,
@@ -80,6 +81,11 @@ type FunnelStage = {
   cadenceExhaustedAction?: CadenceExhaustedAction
   cadenceExhaustedTargetStageId?: string
   funnelId: string
+  automationConfig?: {
+    callStartHour?: string
+    callEndHour?: string
+    maxCallsPerDay?: number
+  }
 }
 
 type Funnel = { id: string; name: string }
@@ -116,13 +122,17 @@ const CHANNEL_ICONS: Record<ContactMethod, typeof PhoneIcon> = {
 export default function CadenciaPage() {
   return (
     <PlanGate feature="cadence" showUpgrade>
-      <CadenciaDashboard />
+      <Suspense fallback={null}>
+        <CadenciaDashboard />
+      </Suspense>
     </PlanGate>
   )
 }
 
 function CadenciaDashboard() {
   const { orgId } = useCrmUser()
+  const searchParams = useSearchParams()
+  const funnelIdParam = searchParams.get('funnelId')
   const [mainTab, setMainTab] = useState<MainTab>('config')
   const [loading, setLoading] = useState(true)
 
@@ -144,7 +154,11 @@ function CadenciaDashboard() {
         const funnelsSnap = await getDocs(collection(db, 'organizations', orgId, 'funnels'))
         const funnelsData = funnelsSnap.docs.map(d => ({ id: d.id, name: d.data().name }))
         setFunnels(funnelsData)
-        if (funnelsData.length > 0) setSelectedFunnel(funnelsData[0].id)
+        if (funnelIdParam && funnelsData.some(f => f.id === funnelIdParam)) {
+          setSelectedFunnel(funnelIdParam)
+        } else if (funnelsData.length > 0) {
+          setSelectedFunnel(funnelsData[0].id)
+        }
 
         // Load stages (from funnelStages collection)
         const stagesSnap = await getDocs(
@@ -220,7 +234,7 @@ function CadenciaDashboard() {
           </div>
         ) : mainTab === 'config' ? (
           <ConfigTab orgId={orgId} stages={filteredStages} allStages={stages} steps={steps} setSteps={setSteps}
-            autoConfig={autoConfig} setAutoConfig={setAutoConfig} />
+            autoConfig={autoConfig} setAutoConfig={setAutoConfig} setStages={setStages} />
         ) : (
           <ExecutionTab orgId={orgId} stages={filteredStages} steps={steps} autoConfig={autoConfig} setAutoConfig={setAutoConfig} />
         )}
@@ -233,10 +247,11 @@ function CadenciaDashboard() {
 /*  CONFIG TAB                                                */
 /* ═══════════════════════════════════════════════════════════ */
 
-function ConfigTab({ orgId, stages, allStages, steps, setSteps, autoConfig, setAutoConfig }: {
+function ConfigTab({ orgId, stages, allStages, steps, setSteps, autoConfig, setAutoConfig, setStages }: {
   orgId: string; stages: FunnelStage[]; allStages: FunnelStage[]; steps: CadenceStep[]
   setSteps: React.Dispatch<React.SetStateAction<CadenceStep[]>>
   autoConfig: AutomationConfig; setAutoConfig: React.Dispatch<React.SetStateAction<AutomationConfig>>
+  setStages: React.Dispatch<React.SetStateAction<FunnelStage[]>>
 }) {
   const [expandedStages, setExpandedStages] = useState<Set<string>>(new Set())
   const [editStep, setEditStep] = useState<CadenceStep | null>(null)
@@ -278,6 +293,17 @@ function ConfigTab({ orgId, stages, allStages, steps, setSteps, autoConfig, setA
     })
   }
 
+  const handleSaveStageCallConfig = async (stageId: string, updates: { callStartHour?: string; callEndHour?: string; maxCallsPerDay?: number | null }) => {
+    const stage = stages.find(s => s.id === stageId)
+    const currentConfig = stage?.automationConfig || {}
+    const merged: Record<string, unknown> = { ...currentConfig, ...updates }
+    // Remove null values (used to clear fields)
+    if (updates.maxCallsPerDay === null) delete merged.maxCallsPerDay
+    const newConfig = merged as FunnelStage['automationConfig']
+    await updateDoc(doc(db, 'funnelStages', stageId), { automationConfig: newConfig || {} })
+    setStages(prev => prev.map(s => s.id === stageId ? { ...s, automationConfig: newConfig } : s))
+  }
+
   return (
     <div className="space-y-4">
       {/* Settings bar */}
@@ -313,7 +339,7 @@ function ConfigTab({ orgId, stages, allStages, steps, setSteps, autoConfig, setA
                 className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm" />
             </div>
           </div>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mt-4">
             <div>
               <label className="block text-xs font-medium text-slate-500 mb-1">Máx. ligações simultâneas</label>
               <input type="number" value={autoConfig.maxConcurrentCalls ?? 10} min={1} max={50}
@@ -327,6 +353,13 @@ function ConfigTab({ orgId, stages, allStages, steps, setSteps, autoConfig, setA
                 onChange={e => saveAutomationConfig({ maxCallsPerDay: parseInt(e.target.value) || 300 })}
                 className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm" />
               <p className="text-xs text-slate-400 mt-0.5">Independente do limite total de ações</p>
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-slate-500 mb-1">Intervalo entre ligações (seg)</label>
+              <input type="number" value={Math.round((autoConfig.callStaggerDelayMs ?? 10000) / 1000)} min={0} max={120}
+                onChange={e => saveAutomationConfig({ callStaggerDelayMs: (parseInt(e.target.value) || 10) * 1000 })}
+                className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm" />
+              <p className="text-xs text-slate-400 mt-0.5">Tempo entre disparos consecutivos</p>
             </div>
           </div>
           <div className="flex items-center gap-3 pt-2">
@@ -469,6 +502,62 @@ function ConfigTab({ orgId, stages, allStages, steps, setSteps, autoConfig, setA
                       )}
                     </div>
                   </div>
+
+                  {/* Per-stage call scheduling config */}
+                  {stageSteps.some(s => s.contactMethod === 'phone') && (
+                    <div className="mt-4 pt-4 border-t border-slate-100">
+                      <div className="flex items-center gap-2 mb-2">
+                        <PhoneIcon className="w-3.5 h-3.5 text-slate-400" />
+                        <span className="text-xs font-medium text-slate-500">Configuração de ligações</span>
+                      </div>
+                      <div className="grid grid-cols-3 gap-3">
+                        <div>
+                          <label className="block text-[10px] text-slate-400 mb-0.5">Início</label>
+                          <input type="time"
+                            value={stage.automationConfig?.callStartHour || ''}
+                            placeholder={autoConfig.workHoursStart}
+                            onChange={e => handleSaveStageCallConfig(stage.id, { callStartHour: e.target.value })}
+                            className="w-full border border-slate-200 rounded-lg px-2 py-1.5 text-xs" />
+                          {!stage.automationConfig?.callStartHour && (
+                            <span className="text-[10px] text-slate-300">Global: {autoConfig.workHoursStart}</span>
+                          )}
+                        </div>
+                        <div>
+                          <label className="block text-[10px] text-slate-400 mb-0.5">Término</label>
+                          <input type="time"
+                            value={stage.automationConfig?.callEndHour || ''}
+                            placeholder={autoConfig.workHoursEnd}
+                            onChange={e => handleSaveStageCallConfig(stage.id, { callEndHour: e.target.value })}
+                            className="w-full border border-slate-200 rounded-lg px-2 py-1.5 text-xs" />
+                          {!stage.automationConfig?.callEndHour && (
+                            <span className="text-[10px] text-slate-300">Global: {autoConfig.workHoursEnd}</span>
+                          )}
+                        </div>
+                        <div>
+                          <label className="block text-[10px] text-slate-400 mb-0.5">Limite/dia</label>
+                          <input type="number"
+                            value={stage.automationConfig?.maxCallsPerDay ?? ''}
+                            placeholder={String(autoConfig.maxCallsPerDay ?? 300)}
+                            min={1} max={5000}
+                            onChange={e => {
+                              const val = e.target.value ? parseInt(e.target.value) : null
+                              handleSaveStageCallConfig(stage.id, { maxCallsPerDay: val })
+                            }}
+                            className="w-full border border-slate-200 rounded-lg px-2 py-1.5 text-xs" />
+                          {!stage.automationConfig?.maxCallsPerDay && (
+                            <span className="text-[10px] text-slate-300">Global: {autoConfig.maxCallsPerDay ?? 300}</span>
+                          )}
+                        </div>
+                      </div>
+                      {(stage.automationConfig?.callStartHour || stage.automationConfig?.callEndHour || stage.automationConfig?.maxCallsPerDay) && (
+                        <button
+                          onClick={() => handleSaveStageCallConfig(stage.id, { callStartHour: '', callEndHour: '', maxCallsPerDay: null })}
+                          className="mt-2 text-[10px] text-slate-400 hover:text-slate-600 underline">
+                          Usar padrão global
+                        </button>
+                      )}
+                    </div>
+                  )}
 
                   {/* Pause toggle for this stage */}
                   <div className="mt-3 flex items-center gap-2">

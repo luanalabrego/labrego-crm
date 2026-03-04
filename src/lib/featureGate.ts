@@ -8,7 +8,7 @@ export function planHasFeature(plan: PlanId, feature: FeatureKey): boolean {
 export async function orgHasFeature(orgId: string, feature: FeatureKey): Promise<boolean> {
   const org = await getOrganization(orgId)
   if (!org) return false
-  return planHasFeature(org.plan, feature)
+  return planHasFeature(org.plan as PlanId, feature)
 }
 
 // Map routes to required features

@@ -60,12 +60,15 @@ export async function createOrganization(data: {
   const ref = db.collection('organizations').doc()
   await ref.set(orgData)
 
-  // Initialize credits subcollection
+  // Initialize credits subcollection (dual: minutes + actions)
   await ref.collection('credits').doc('balance').set({
-    balance: limits.monthlyCredits,
-    totalPurchased: limits.monthlyCredits,
+    balance: limits.monthlyMinutes,
+    totalPurchased: limits.monthlyMinutes,
     totalConsumed: 0,
     lastRechargeAt: now,
+    actionBalance: limits.monthlyActions,
+    actionTotalPurchased: limits.monthlyActions,
+    actionTotalConsumed: 0,
   })
 
   return { id: ref.id, ...orgData }

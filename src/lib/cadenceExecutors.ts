@@ -1,6 +1,7 @@
 import { getAdminDb } from './firebaseAdmin'
 import { makeVapiCall, sendWhatsAppMessage } from './callRouting'
 import { sendEmail } from './email'
+import { canMakeCall, canSendWhatsApp, deductAction } from './credits'
 import { replaceCadenceVariables, type CadenceStep, type ContactMethod } from '@/types/cadence'
 import React from 'react'
 
@@ -23,7 +24,7 @@ export async function executeCadenceStep(
     case 'phone':
       return executePhoneStep(step, contact, orgId)
     case 'whatsapp':
-      return executeWhatsAppStep(step, contact)
+      return executeWhatsAppStep(step, contact, orgId)
     case 'email':
       return executeEmailStep(step, contact)
     case 'meeting':
@@ -36,6 +37,16 @@ export async function executeCadenceStep(
 async function executePhoneStep(step: CadenceStep, contact: Contact, orgId?: string): Promise<ExecutionResult> {
   const phone = contact.phone as string
   if (!phone) return { success: false, error: 'Contato sem telefone' }
+
+  // Verificar créditos antes de ligar (ação + minutos)
+  if (orgId) {
+    const creditCheck = await canMakeCall(orgId)
+    if (!creditCheck.allowed) {
+      return { success: false, error: creditCheck.reason || 'Créditos insuficientes' }
+    }
+    // Debitar 1 ação (call) antes de iniciar
+    await deductAction(orgId, 'call', contact.id, `Ligação cadência: ${contact.name || contact.id}`)
+  }
 
   try {
     // Pass cadence step overrides for system prompt and first message
@@ -59,9 +70,18 @@ async function executePhoneStep(step: CadenceStep, contact: Contact, orgId?: str
   }
 }
 
-async function executeWhatsAppStep(step: CadenceStep, contact: Contact): Promise<ExecutionResult> {
+async function executeWhatsAppStep(step: CadenceStep, contact: Contact, orgId?: string): Promise<ExecutionResult> {
   const phone = contact.phone as string
   if (!phone) return { success: false, error: 'Contato sem telefone' }
+
+  // Verificar créditos de ação antes de enviar
+  if (orgId) {
+    const creditCheck = await canSendWhatsApp(orgId)
+    if (!creditCheck.allowed) {
+      return { success: false, error: creditCheck.reason || 'Créditos insuficientes' }
+    }
+    await deductAction(orgId, 'whatsapp', contact.id, `WhatsApp cadência: ${contact.name || contact.id}`)
+  }
 
   const template = step.messageTemplate || ''
   const message = replaceCadenceVariables(template, contact)
@@ -223,6 +243,8 @@ export async function logCadenceExecution(
     ? `Cadência automática: ${data.stepName} via ${data.channel}`
     : `Cadência falhou: ${data.stepName} via ${data.channel} — ${data.error}`
 
+  const now = new Date().toISOString()
+
   await db.collection('clients').doc(clientId).collection('logs').add({
     action,
     message,
@@ -237,6 +259,13 @@ export async function logCadenceExecution(
       templatePreview: data.templatePreview || '',
       error: data.error || '',
     },
-    createdAt: new Date().toISOString(),
+    createdAt: now,
   })
+
+  // Atualizar lastFollowUpAt para refletir atividade recente no card do funil
+  if (data.success) {
+    await db.collection('clients').doc(clientId).update({
+      lastFollowUpAt: now,
+    })
+  }
 }

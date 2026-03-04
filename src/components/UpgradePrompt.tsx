@@ -9,11 +9,11 @@ interface UpgradePromptProps {
 }
 
 function getMinPlanForFeature(feature: FeatureKey): PlanId {
-  const plans: PlanId[] = ['basic', 'standard', 'pro']
+  const plans: PlanId[] = ['agency_start', 'direct_starter', 'agency_pro', 'direct_growth', 'agency_scale', 'direct_scale']
   for (const p of plans) {
-    if (PLAN_FEATURES[p].includes(feature)) return p
+    if (PLAN_FEATURES[p]?.includes(feature)) return p
   }
-  return 'pro'
+  return 'direct_starter'
 }
 
 export default function UpgradePrompt({ feature, className = '' }: UpgradePromptProps) {

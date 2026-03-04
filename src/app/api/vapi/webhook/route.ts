@@ -16,6 +16,7 @@ import {
 } from '@/lib/callRouting'
 import { getAdminDb } from '@/lib/firebaseAdmin'
 import { onCallCompleted, onCallFailed } from '@/lib/callQueue'
+import { deductCredits } from '@/lib/credits'
 import {
   VapiToolCallRequest,
   VapiEndOfCallReport,
@@ -432,6 +433,17 @@ async function handleEndOfCall(body: VapiEndOfCallReport): Promise<NextResponse>
 
     } else {
       console.error('[VAPI WEBHOOK] No clientId found, skipping CRM update')
+    }
+
+    // ===== DEBITAR CRÉDITOS DE MINUTOS =====
+    if (orgId && durationSec > 0) {
+      try {
+        const minutes = Math.ceil(durationSec / 60)
+        await deductCredits(orgId, minutes, callId || undefined, `Ligação ${prospectName || clientId || 'desconhecido'}: ${minutes} min`)
+        console.log(`[VAPI WEBHOOK] Debitados ${minutes} minutos de crédito para org ${orgId}`)
+      } catch (creditError) {
+        console.error('[VAPI WEBHOOK] Erro ao debitar créditos:', creditError)
+      }
     }
 
     // ===== AVANÇAR FILA DE LIGAÇÕES =====

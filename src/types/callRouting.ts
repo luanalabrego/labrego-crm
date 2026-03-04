@@ -539,6 +539,7 @@ export interface CallQueueItem {
   endedAt?: string
   // Cadence fields (populated when queue is created from cadence)
   cadenceStepId?: string
+  stageId?: string
   cadenceOverrides?: {
     systemPrompt?: string
     firstMessage?: string
@@ -559,4 +560,6 @@ export interface CallQueue {
   createdAt: string
   updatedAt: string
   completedAt?: string
+  callStaggerDelayMs?: number // Delay entre ligações consecutivas (default: 10000 = 10s)
+  lastCallStartedAt?: string // Timestamp da última ligação iniciada
 }
