@@ -4,16 +4,13 @@ import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { signInWithEmailAndPassword, sendPasswordResetEmail, signInWithPopup, GoogleAuthProvider } from 'firebase/auth'
 import { auth } from '@/lib/firebaseClient'
-import { toast } from 'sonner'
+import Link from 'next/link'
 
 export default function LoginPage() {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
-  const [showReset, setShowReset] = useState(false)
-  const [resetEmail, setResetEmail] = useState('')
-  const [resetLoading, setResetLoading] = useState(false)
   const [showPassword, setShowPassword] = useState(false)
   const [googleLoading, setGoogleLoading] = useState(false)
   const router = useRouter()
@@ -159,16 +156,13 @@ export default function LoginPage() {
           <div className="backdrop-blur-xl bg-white/[0.04] border border-white/[0.08] rounded-3xl p-8 shadow-[0_0_60px_rgba(19,222,252,0.06)]">
             <div className="mb-8">
               <h2 className="text-2xl font-bold text-white">
-                {showReset ? 'Recuperar senha' : 'Bem-vindo de volta'}
+                Bem-vindo de volta
               </h2>
               <p className="text-sm text-slate-400 mt-1">
-                {showReset
-                  ? 'Digite seu e-mail para receber o link de recuperação'
-                  : 'Entre na sua conta para continuar'}
+                Entre na sua conta para continuar
               </p>
             </div>
 
-            {!showReset ? (
               <form onSubmit={handleSubmit} className="space-y-5">
                 <div>
                   <label htmlFor="email" className="block text-sm font-medium text-slate-300 mb-2">
@@ -190,16 +184,12 @@ export default function LoginPage() {
                     <label htmlFor="password" className="block text-sm font-medium text-slate-300">
                       Senha
                     </label>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setShowReset(true)
-                        setResetEmail(email)
-                      }}
+                    <Link
+                      href="/reset-password"
                       className="text-xs text-[#13DEFC]/80 hover:text-[#13DEFC] font-medium transition-colors"
                     >
                       Esqueci minha senha
-                    </button>
+                    </Link>
                   </div>
                   <div className="relative">
                     <input
@@ -287,41 +277,6 @@ export default function LoginPage() {
                   Entrar com Google
                 </button>
               </form>
-            ) : (
-              <form onSubmit={handleResetPassword} className="space-y-5">
-                <div>
-                  <label htmlFor="reset-email" className="block text-sm font-medium text-slate-300 mb-2">
-                    E-mail
-                  </label>
-                  <input
-                    id="reset-email"
-                    type="email"
-                    required
-                    value={resetEmail}
-                    onChange={(e) => setResetEmail(e.target.value)}
-                    className="w-full rounded-xl border border-white/10 bg-white/[0.06] px-4 py-3 text-sm text-white placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-[#13DEFC]/40 focus:border-[#13DEFC]/40 transition-all"
-                    placeholder="seu@email.com"
-                    autoFocus
-                  />
-                </div>
-
-                <button
-                  type="submit"
-                  disabled={resetLoading}
-                  className="w-full bg-gradient-to-r from-[#13DEFC] to-[#09B00F] hover:from-[#11c8e3] hover:to-[#089e0d] disabled:opacity-50 disabled:cursor-not-allowed text-slate-950 font-bold py-3.5 rounded-xl transition-all shadow-lg shadow-[#13DEFC]/10 hover:shadow-[#13DEFC]/20"
-                >
-                  {resetLoading ? 'Enviando...' : 'Enviar link de recuperação'}
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => setShowReset(false)}
-                  className="w-full text-sm text-slate-400 hover:text-white font-medium py-2 transition-colors"
-                >
-                  Voltar ao login
-                </button>
-              </form>
-            )}
           </div>
 
           {/* Footer */}

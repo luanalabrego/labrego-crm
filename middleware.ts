@@ -8,6 +8,7 @@ const BYPASS_PATHS = [
   '/api/n8n/',
   '/api/health',
   '/login',
+  '/reset-password',
 ]
 
 export async function middleware(request: NextRequest) {
