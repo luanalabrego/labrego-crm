@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
-import { Building2, Plus, Pencil, X } from 'lucide-react'
+import { Building2, Plus, Pencil, X, Mail } from 'lucide-react'
 import { PLAN_DISPLAY } from '@/types/plan'
 import type { Organization } from '@/types/organization'
 import { useCrmUser } from '@/contexts/CrmUserContext'
@@ -128,17 +128,18 @@ export default function SuperAdminPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h2 className="text-xl font-bold text-gray-900">Empresas</h2>
-          <p className="text-sm text-gray-500 mt-1">Gerencie as organizacoes cadastradas.</p>
+      <div className="flex items-center justify-between gap-3">
+        <div className="min-w-0">
+          <h2 className="text-lg sm:text-xl font-bold text-gray-900">Empresas</h2>
+          <p className="text-xs sm:text-sm text-gray-500 mt-0.5 sm:mt-1">Gerencie as organizacoes cadastradas.</p>
         </div>
         <button
           onClick={openCreate}
-          className="inline-flex items-center gap-2 px-4 py-2.5 bg-primary-600 text-white rounded-lg hover:bg-primary-700 transition text-sm font-medium shadow-sm"
+          className="inline-flex items-center gap-2 px-3 sm:px-4 py-2 sm:py-2.5 bg-primary-600 text-white rounded-lg hover:bg-primary-700 transition text-sm font-medium shadow-sm shrink-0"
         >
           <Plus className="w-4 h-4" />
-          Nova Empresa
+          <span className="hidden sm:inline">Nova Empresa</span>
+          <span className="sm:hidden">Nova</span>
         </button>
       </div>
 
@@ -152,7 +153,9 @@ export default function SuperAdminPage() {
           <p className="text-gray-500">Nenhuma empresa cadastrada.</p>
         </div>
       ) : (
-        <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+        <>
+        {/* Desktop: tabela */}
+        <div className="hidden md:block bg-white rounded-xl border border-gray-200 overflow-hidden">
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-gray-100 bg-gray-50">
@@ -194,6 +197,55 @@ export default function SuperAdminPage() {
             </tbody>
           </table>
         </div>
+
+        {/* Mobile: cards */}
+        <div className="md:hidden space-y-3">
+          {orgs.map((org) => (
+            <div key={org.id} className="bg-white rounded-xl border border-gray-200 p-4 space-y-3">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <h3 className="text-base font-semibold text-gray-900 truncate">{org.name}</h3>
+                  <div className="flex items-center gap-1.5 mt-1 text-gray-500">
+                    <Mail className="w-3.5 h-3.5 shrink-0" />
+                    <span className="text-sm truncate">{org.adminEmail || '—'}</span>
+                  </div>
+                </div>
+                <button
+                  onClick={() => handleToggleStatus(org)}
+                  disabled={togglingId === org.id}
+                  className="relative inline-flex h-7 w-12 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-primary-500/40 disabled:opacity-50 shrink-0"
+                  style={{ backgroundColor: org.status === 'active' ? '#22c55e' : '#d1d5db' }}
+                  title={org.status === 'active' ? 'Ativo — clique para inativar' : 'Inativo — clique para ativar'}
+                >
+                  <span
+                    className={`inline-block h-5 w-5 rounded-full bg-white shadow transition-transform ${
+                      org.status === 'active' ? 'translate-x-6' : 'translate-x-1'
+                    }`}
+                  />
+                </button>
+              </div>
+
+              <div className="flex items-center justify-between pt-2 border-t border-gray-100">
+                <div className="flex items-center gap-2">
+                  <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium ${STATUS_COLORS[org.status] || 'bg-gray-100 text-gray-600'}`}>
+                    {STATUS_LABELS[org.status] || org.status}
+                  </span>
+                  <span className="text-sm text-gray-600 font-medium">
+                    {(PLAN_DISPLAY as Record<string, { displayName: string }>)[org.plan]?.displayName || org.plan}
+                  </span>
+                </div>
+                <button
+                  onClick={() => openEdit(org)}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-primary-600 hover:bg-primary-50 rounded-lg transition text-sm font-medium"
+                >
+                  <Pencil className="w-3.5 h-3.5" />
+                  Editar
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+        </>
       )}
 
       {showModal && (
