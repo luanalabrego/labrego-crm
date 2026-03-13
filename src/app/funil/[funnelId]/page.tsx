@@ -403,6 +403,7 @@ export default function FunilDetailPage() {
   const [newStageConversionType, setNewStageConversionType] = useState<'positive' | 'negative' | 'neutral' | 'final_conversion'>('neutral')
   const [savingStage, setSavingStage] = useState(false)
   const [deletingStageId, setDeletingStageId] = useState<string | null>(null)
+  const [showQuickAddStage, setShowQuickAddStage] = useState(false)
 
   // Macro Stage settings state
   const [editingMacroStage, setEditingMacroStage] = useState<MacroStage | null>(null)
@@ -5246,6 +5247,108 @@ export default function FunilDetailPage() {
                   }}
                 </Droppable>
               )}
+
+              {/* Quick Add Stage Button */}
+              <div className="flex-shrink-0 flex items-start pt-0">
+                {!showQuickAddStage ? (
+                  <button
+                    onClick={() => setShowQuickAddStage(true)}
+                    className="w-80 min-h-[200px] flex flex-col items-center justify-center gap-3 rounded-2xl border-2 border-dashed border-slate-300 bg-slate-50/50 hover:border-primary-400 hover:bg-primary-50/50 transition-all group cursor-pointer"
+                  >
+                    <div className="w-12 h-12 rounded-xl bg-slate-200 group-hover:bg-primary-100 flex items-center justify-center transition-colors">
+                      <PlusIcon className="w-6 h-6 text-slate-400 group-hover:text-primary-600 transition-colors" />
+                    </div>
+                    <span className="text-sm font-medium text-slate-400 group-hover:text-primary-600 transition-colors">
+                      Adicionar etapa
+                    </span>
+                  </button>
+                ) : (
+                  <div className="w-80 rounded-2xl border border-primary-200 bg-white shadow-xl shadow-primary-100/50 overflow-hidden">
+                    <div className="px-4 py-3 bg-gradient-to-r from-primary-500 to-purple-600 flex items-center justify-between">
+                      <h4 className="text-sm font-semibold text-white flex items-center gap-2">
+                        <PlusIcon className="w-4 h-4" />
+                        Nova Etapa
+                      </h4>
+                      <button
+                        onClick={() => setShowQuickAddStage(false)}
+                        className="p-1 hover:bg-white/20 rounded-lg transition-colors"
+                      >
+                        <Cross2Icon className="w-4 h-4 text-white" />
+                      </button>
+                    </div>
+                    <div className="p-4 space-y-3">
+                      <div>
+                        <label className="block text-xs font-medium text-slate-600 mb-1">Nome da Etapa</label>
+                        <input
+                          type="text"
+                          value={newStageName}
+                          onChange={(e) => setNewStageName(e.target.value)}
+                          placeholder="Ex: Qualificação"
+                          className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary-500/20 focus:border-primary-400 bg-white"
+                          autoFocus
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter' && newStageName.trim()) {
+                              handleAddStage()
+                              setShowQuickAddStage(false)
+                            }
+                            if (e.key === 'Escape') setShowQuickAddStage(false)
+                          }}
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-slate-600 mb-1">Cor</label>
+                        <div className="flex gap-1.5">
+                          {stageColorOptions.map((opt, colorIdx) => (
+                            <button
+                              key={colorIdx}
+                              onClick={() => setNewStageColor(colorIdx)}
+                              className={`w-6 h-6 rounded-full bg-gradient-to-r ${opt.gradient} transition-all ${
+                                newStageColor === colorIdx ? 'ring-2 ring-offset-2 ring-primary-500 scale-110' : 'hover:scale-105'
+                              }`}
+                            />
+                          ))}
+                        </div>
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-slate-600 mb-1">
+                          Probabilidade: {newStageProbability}%
+                        </label>
+                        <input
+                          type="range"
+                          min="0"
+                          max="100"
+                          value={newStageProbability}
+                          onChange={(e) => setNewStageProbability(parseInt(e.target.value))}
+                          className="w-full accent-primary-600"
+                        />
+                      </div>
+                      <div className="flex gap-2 pt-1">
+                        <button
+                          onClick={() => setShowQuickAddStage(false)}
+                          className="flex-1 px-3 py-2 border border-slate-200 text-slate-600 rounded-lg text-sm font-medium hover:bg-slate-50 transition-colors"
+                        >
+                          Cancelar
+                        </button>
+                        <button
+                          onClick={() => {
+                            handleAddStage()
+                            setShowQuickAddStage(false)
+                          }}
+                          disabled={!newStageName.trim() || savingStage}
+                          className="flex-1 flex items-center justify-center gap-2 px-3 py-2 bg-gradient-to-r from-primary-600 to-purple-600 text-white rounded-lg text-sm font-medium hover:from-primary-700 hover:to-purple-700 transition-all disabled:opacity-50"
+                        >
+                          {savingStage ? (
+                            <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                          ) : (
+                            <PlusIcon className="w-4 h-4" />
+                          )}
+                          Adicionar
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
             </div>
           </DragDropContext>
         )}
