@@ -23,6 +23,7 @@ import {
   CheckIcon,
   FunnelIcon,
   TagIcon,
+  ExclamationTriangleIcon,
 } from '@heroicons/react/24/outline'
 import {
   IcpProfile,
@@ -51,6 +52,12 @@ export default function AdminIcpPage() {
   const [showModal, setShowModal] = useState(false)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [form, setForm] = useState(EMPTY_ICP_PROFILE)
+
+  // Delete confirmation state
+  const [deleteConfirm, setDeleteConfirm] = useState<{ open: boolean; id: string | null }>({
+    open: false,
+    id: null,
+  })
 
   // Load data
   useEffect(() => {
@@ -168,13 +175,19 @@ export default function AdminIcpPage() {
   }
 
   const handleDelete = async (id: string) => {
-    if (!confirm('Tem certeza que deseja excluir este perfil ICP?')) return
+    setDeleteConfirm({ open: true, id })
+  }
+
+  const confirmDelete = async () => {
+    if (!deleteConfirm.id) return
     try {
-      await deleteDoc(doc(db, 'icpProfiles', id))
+      await deleteDoc(doc(db, 'icpProfiles', deleteConfirm.id))
       toast.success('Perfil ICP excluido')
     } catch (error) {
       console.error('Error deleting ICP:', error)
       toast.error('Erro ao excluir')
+    } finally {
+      setDeleteConfirm({ open: false, id: null })
     }
   }
 
@@ -346,6 +359,47 @@ export default function AdminIcpPage() {
               )}
             </div>
           ))}
+        </div>
+      )}
+
+      {/* Delete Confirmation Popup */}
+      {deleteConfirm.open && (
+        <div
+          className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50"
+          onClick={() => setDeleteConfirm({ open: false, id: null })}
+        >
+          <div
+            className="bg-white rounded-xl shadow-2xl p-6 max-w-md w-full mx-4"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-start gap-4">
+              <div className="flex-shrink-0 w-10 h-10 rounded-full bg-red-100 flex items-center justify-center">
+                <ExclamationTriangleIcon className="w-5 h-5 text-red-600" />
+              </div>
+              <div className="flex-1">
+                <h3 className="text-lg font-semibold text-neutral-900">
+                  Excluir perfil ICP
+                </h3>
+                <p className="mt-2 text-sm text-neutral-600">
+                  Tem certeza que deseja excluir este perfil ICP? Esta acao nao pode ser desfeita.
+                </p>
+              </div>
+            </div>
+            <div className="flex justify-end gap-3 mt-6">
+              <button
+                onClick={() => setDeleteConfirm({ open: false, id: null })}
+                className="px-4 py-2 text-sm font-medium text-neutral-700 bg-neutral-100 hover:bg-neutral-200 rounded-lg transition-colors"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={confirmDelete}
+                className="px-4 py-2 text-sm font-medium text-white bg-red-600 hover:bg-red-700 rounded-lg transition-colors"
+              >
+                Sim, excluir
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
