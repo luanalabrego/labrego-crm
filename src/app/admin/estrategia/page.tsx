@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import { doc, getDoc, setDoc } from 'firebase/firestore'
 import { db } from '@/lib/firebaseClient'
 import { useCrmUser } from '@/contexts/CrmUserContext'
@@ -108,6 +108,7 @@ type PlaybookData = Record<string, string>
 export default function EstrategiaComercialPage() {
   const { orgId } = useCrmUser()
   const [data, setData] = useState<PlaybookData>({})
+  const [savedData, setSavedData] = useState<PlaybookData>({})
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [expandedSection, setExpandedSection] = useState<string | null>(null)
@@ -118,7 +119,9 @@ export default function EstrategiaComercialPage() {
       const docRef = doc(db, 'organizations', orgId, 'settings', 'playbook')
       const snap = await getDoc(docRef)
       if (snap.exists()) {
-        setData(snap.data() as PlaybookData)
+        const loadedData = snap.data() as PlaybookData
+        setData(loadedData)
+        setSavedData(loadedData)
       }
     } catch (error) {
       console.error('Erro ao carregar playbook:', error)
@@ -131,12 +134,26 @@ export default function EstrategiaComercialPage() {
     loadData()
   }, [loadData])
 
+  const hasChanges = useMemo(() => {
+    const allKeys = new Set([
+      ...Object.keys(data),
+      ...Object.keys(savedData),
+      ...SECTIONS.map((s) => s.key),
+    ])
+    for (const key of allKeys) {
+      if (key === 'updatedAt') continue
+      if ((data[key] || '') !== (savedData[key] || '')) return true
+    }
+    return false
+  }, [data, savedData])
+
   const handleSave = async () => {
     if (!orgId) return
     setSaving(true)
     try {
       const docRef = doc(db, 'organizations', orgId, 'settings', 'playbook')
       await setDoc(docRef, { ...data, updatedAt: new Date().toISOString() }, { merge: true })
+      setSavedData({ ...data })
       toast.success('Playbook salvo com sucesso!')
     } catch (error) {
       console.error('Erro ao salvar playbook:', error)
@@ -183,8 +200,8 @@ export default function EstrategiaComercialPage() {
             </span>
             <button
               onClick={handleSave}
-              disabled={saving}
-              className="flex items-center gap-2 px-4 py-2 bg-primary-600 text-white rounded-xl text-sm font-medium hover:bg-primary-700 disabled:opacity-50 transition-colors shadow-sm"
+              disabled={saving || !hasChanges}
+              className="flex items-center gap-2 px-4 py-2 bg-primary-600 text-white rounded-xl text-sm font-medium hover:bg-primary-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors shadow-sm"
             >
               {saving ? (
                 <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
@@ -276,8 +293,8 @@ export default function EstrategiaComercialPage() {
       <div className="mt-6 flex justify-end">
         <button
           onClick={handleSave}
-          disabled={saving}
-          className="flex items-center gap-2 px-6 py-2.5 bg-primary-600 text-white rounded-xl text-sm font-medium hover:bg-primary-700 disabled:opacity-50 transition-colors shadow-sm"
+          disabled={saving || !hasChanges}
+          className="flex items-center gap-2 px-6 py-2.5 bg-primary-600 text-white rounded-xl text-sm font-medium hover:bg-primary-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors shadow-sm"
         >
           {saving ? (
             <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />

@@ -23,6 +23,7 @@ import {
   CheckIcon,
   FunnelIcon,
   TagIcon,
+  ExclamationTriangleIcon,
 } from '@heroicons/react/24/outline'
 import {
   IcpProfile,
@@ -51,6 +52,12 @@ export default function AdminIcpPage() {
   const [showModal, setShowModal] = useState(false)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [form, setForm] = useState(EMPTY_ICP_PROFILE)
+
+  // Delete confirmation state
+  const [deleteConfirm, setDeleteConfirm] = useState<{ open: boolean; id: string | null }>({
+    open: false,
+    id: null,
+  })
 
   // Load data
   useEffect(() => {
@@ -168,13 +175,19 @@ export default function AdminIcpPage() {
   }
 
   const handleDelete = async (id: string) => {
-    if (!confirm('Tem certeza que deseja excluir este perfil ICP?')) return
+    setDeleteConfirm({ open: true, id })
+  }
+
+  const confirmDelete = async () => {
+    if (!deleteConfirm.id) return
     try {
-      await deleteDoc(doc(db, 'icpProfiles', id))
+      await deleteDoc(doc(db, 'icpProfiles', deleteConfirm.id))
       toast.success('Perfil ICP excluido')
     } catch (error) {
       console.error('Error deleting ICP:', error)
       toast.error('Erro ao excluir')
+    } finally {
+      setDeleteConfirm({ open: false, id: null })
     }
   }
 
@@ -349,6 +362,47 @@ export default function AdminIcpPage() {
         </div>
       )}
 
+      {/* Delete Confirmation Popup */}
+      {deleteConfirm.open && (
+        <div
+          className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50"
+          onClick={() => setDeleteConfirm({ open: false, id: null })}
+        >
+          <div
+            className="bg-white rounded-xl shadow-2xl p-6 max-w-md w-full mx-4"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-start gap-4">
+              <div className="flex-shrink-0 w-10 h-10 rounded-full bg-red-100 flex items-center justify-center">
+                <ExclamationTriangleIcon className="w-5 h-5 text-red-600" />
+              </div>
+              <div className="flex-1">
+                <h3 className="text-lg font-semibold text-neutral-900">
+                  Excluir perfil ICP
+                </h3>
+                <p className="mt-2 text-sm text-neutral-600">
+                  Tem certeza que deseja excluir este perfil ICP? Esta acao nao pode ser desfeita.
+                </p>
+              </div>
+            </div>
+            <div className="flex justify-end gap-3 mt-6">
+              <button
+                onClick={() => setDeleteConfirm({ open: false, id: null })}
+                className="px-4 py-2 text-sm font-medium text-neutral-700 bg-neutral-100 hover:bg-neutral-200 rounded-lg transition-colors"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={confirmDelete}
+                className="px-4 py-2 text-sm font-medium text-white bg-red-600 hover:bg-red-700 rounded-lg transition-colors"
+              >
+                Sim, excluir
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Modal */}
       {showModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
@@ -367,7 +421,7 @@ export default function AdminIcpPage() {
 
             <div className="p-5 space-y-5">
               {/* Name + Color */}
-              <div className="flex gap-4">
+              <div className="flex flex-col sm:flex-row gap-4">
                 <div className="flex-1">
                   <label className="block text-sm font-medium text-neutral-700 mb-1">
                     Nome do Perfil *
@@ -386,7 +440,7 @@ export default function AdminIcpPage() {
                   <label className="block text-sm font-medium text-neutral-700 mb-1">
                     Cor
                   </label>
-                  <div className="flex gap-1.5">
+                  <div className="flex flex-wrap gap-1.5">
                     {ICP_COLORS.map((c) => (
                       <button
                         key={c}
@@ -563,7 +617,7 @@ export default function AdminIcpPage() {
               </div>
 
               {/* Criteria: Capital Social Range */}
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <label className="block text-sm font-medium text-neutral-700 mb-1">
                     Capital Social Min (R$)
@@ -665,18 +719,19 @@ export default function AdminIcpPage() {
               )}
 
               {/* Active toggle */}
-              <div className="flex items-center gap-3">
+              <div className="flex items-center gap-3 pt-2 border-t border-neutral-100">
                 <button
+                  type="button"
                   onClick={() =>
                     setForm((prev) => ({ ...prev, isActive: !prev.isActive }))
                   }
-                  className={`w-10 h-6 rounded-full transition-colors relative ${
+                  className={`flex-shrink-0 w-11 h-6 rounded-full transition-colors relative ${
                     form.isActive ? 'bg-primary-600' : 'bg-neutral-300'
                   }`}
                 >
                   <span
-                    className={`absolute top-0.5 w-5 h-5 bg-white rounded-full shadow transition-transform ${
-                      form.isActive ? 'translate-x-4' : 'translate-x-0.5'
+                    className={`absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full shadow transition-transform ${
+                      form.isActive ? 'translate-x-5' : 'translate-x-0'
                     }`}
                   />
                 </button>
@@ -687,7 +742,7 @@ export default function AdminIcpPage() {
             </div>
 
             {/* Footer */}
-            <div className="flex justify-end gap-3 p-5 border-t border-neutral-200">
+            <div className="flex justify-end gap-3 p-4 sm:p-5 border-t border-neutral-200">
               <button
                 onClick={() => setShowModal(false)}
                 className="px-4 py-2 text-sm text-neutral-600 hover:text-neutral-800"

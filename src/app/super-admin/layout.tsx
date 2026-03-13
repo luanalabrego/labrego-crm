@@ -70,29 +70,30 @@ export default function SuperAdminLayout({ children }: { children: ReactNode }) 
     <div className="min-h-screen bg-gray-50">
       <header className="bg-white border-b border-gray-200">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex items-center justify-between h-16">
-            <div className="flex items-center gap-3">
-              <ShieldCheck className="w-6 h-6 text-primary-600" />
-              <h1 className="text-lg font-bold text-gray-900">Painel Super Admin</h1>
+          <div className="flex items-center justify-between h-14 sm:h-16">
+            <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+              <ShieldCheck className="w-5 h-5 sm:w-6 sm:h-6 text-primary-600 shrink-0" />
+              <h1 className="text-base sm:text-lg font-bold text-gray-900 truncate">Super Admin</h1>
             </div>
-            <div className="flex items-center gap-4">
+            <div className="flex items-center gap-2 sm:gap-4 shrink-0">
               {userEmail && (
-                <span className="text-sm text-gray-500">{userEmail}</span>
+                <span className="text-xs sm:text-sm text-gray-500 hidden sm:inline">{userEmail}</span>
               )}
               <Link
                 href="/contatos"
-                className="inline-flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-700 transition"
+                className="inline-flex items-center gap-1.5 text-xs sm:text-sm text-gray-500 hover:text-gray-700 transition"
               >
                 <ArrowLeft className="w-4 h-4" />
-                Voltar ao CRM
+                <span className="hidden sm:inline">Voltar ao CRM</span>
+                <span className="sm:hidden">Voltar</span>
               </Link>
             </div>
           </div>
         </div>
       </header>
 
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
-        <nav className="flex gap-1 bg-white rounded-xl p-1 shadow-sm border border-gray-200 mb-6">
+      <div className="max-w-7xl mx-auto px-3 sm:px-6 lg:px-8 py-4 sm:py-6">
+        <nav className="flex gap-1 bg-white rounded-xl p-1 shadow-sm border border-gray-200 mb-4 sm:mb-6">
           {tabs.map((tab) => {
             const isActive =
               tab.href === '/super-admin'
@@ -102,7 +103,7 @@ export default function SuperAdminLayout({ children }: { children: ReactNode }) 
               <Link
                 key={tab.href}
                 href={tab.href}
-                className={`flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium transition ${
+                className={`flex-1 sm:flex-none flex items-center justify-center sm:justify-start gap-2 px-3 sm:px-4 py-2.5 rounded-lg text-sm font-medium transition ${
                   isActive
                     ? 'bg-primary-600 text-white shadow-sm'
                     : 'text-gray-600 hover:text-gray-900 hover:bg-gray-50'
