@@ -67,6 +67,10 @@ export default function AdminCentrosCustoPage() {
   const [editingId, setEditingId] = useState<string | null>(null)
   const [form, setForm] = useState<CostCenterForm>(EMPTY_FORM)
 
+  // Delete confirmation modal state
+  const [deleteTarget, setDeleteTarget] = useState<CostCenter | null>(null)
+  const [deleting, setDeleting] = useState(false)
+
   // Load data
   useEffect(() => {
     if (!orgId) return
@@ -161,19 +165,22 @@ export default function AdminCentrosCustoPage() {
     }
   }
 
-  const handleDelete = async (id: string) => {
-    if (!orgId) return
-    const count = clientCounts[id] || 0
-    const message = count > 0
-      ? `Este centro de custo tem ${count} cliente(s) associado(s). Deseja excluir mesmo assim?`
-      : 'Tem certeza que deseja excluir este centro de custo?'
-    if (!confirm(message)) return
+  const openDeleteConfirm = (cc: CostCenter) => {
+    setDeleteTarget(cc)
+  }
+
+  const handleDelete = async () => {
+    if (!orgId || !deleteTarget) return
+    setDeleting(true)
     try {
-      await deleteDoc(doc(db, 'organizations', orgId, 'costCenters', id))
+      await deleteDoc(doc(db, 'organizations', orgId, 'costCenters', deleteTarget.id))
       toast.success('Centro de custo excluido')
+      setDeleteTarget(null)
     } catch (error) {
       console.error('Error deleting cost center:', error)
       toast.error('Erro ao excluir centro de custo')
+    } finally {
+      setDeleting(false)
     }
   }
 
@@ -270,7 +277,7 @@ export default function AdminCentrosCustoPage() {
                       <PencilIcon className="w-4 h-4" />
                     </button>
                     <button
-                      onClick={() => handleDelete(cc.id)}
+                      onClick={() => openDeleteConfirm(cc)}
                       className="p-2 text-neutral-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
                     >
                       <TrashIcon className="w-4 h-4" />
@@ -359,25 +366,28 @@ export default function AdminCentrosCustoPage() {
               </div>
 
               {/* Active toggle */}
-              <div className="flex items-center gap-3">
+              <label className="flex items-center gap-3 cursor-pointer">
                 <button
+                  type="button"
+                  role="switch"
+                  aria-checked={form.isActive}
                   onClick={() =>
                     setForm((prev) => ({ ...prev, isActive: !prev.isActive }))
                   }
-                  className={`w-10 h-6 rounded-full transition-colors relative ${
+                  className={`relative inline-flex h-6 w-11 flex-shrink-0 items-center rounded-full transition-colors ${
                     form.isActive ? 'bg-primary-600' : 'bg-neutral-300'
                   }`}
                 >
                   <span
-                    className={`absolute top-0.5 w-5 h-5 bg-white rounded-full shadow transition-transform ${
-                      form.isActive ? 'translate-x-4' : 'translate-x-0.5'
+                    className={`inline-block h-4 w-4 rounded-full bg-white shadow-sm transition-transform ${
+                      form.isActive ? 'translate-x-6' : 'translate-x-1'
                     }`}
                   />
                 </button>
                 <span className="text-sm text-neutral-700">
                   Centro de custo {form.isActive ? 'ativo' : 'inativo'}
                 </span>
-              </div>
+              </label>
             </div>
 
             {/* Footer */}
@@ -394,6 +404,43 @@ export default function AdminCentrosCustoPage() {
                 className="btn-primary flex items-center gap-2"
               >
                 {saving ? 'Salvando...' : editingId ? 'Salvar' : 'Criar Centro de Custo'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {/* Delete confirmation modal */}
+      {deleteTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm mx-4 overflow-hidden">
+            <div className="p-6 text-center">
+              <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-red-100 mb-4">
+                <TrashIcon className="h-6 w-6 text-red-600" />
+              </div>
+              <h3 className="text-lg font-semibold text-neutral-900 mb-2">
+                Excluir centro de custo
+              </h3>
+              <p className="text-sm text-neutral-500">
+                {(clientCounts[deleteTarget.id] || 0) > 0
+                  ? <>Este centro de custo tem <strong>{clientCounts[deleteTarget.id]}</strong> cliente(s) associado(s). Deseja excluir mesmo assim?</>
+                  : <>Tem certeza que deseja excluir <strong>{deleteTarget.name}</strong>? Esta acao nao pode ser desfeita.</>
+                }
+              </p>
+            </div>
+            <div className="flex border-t border-neutral-200">
+              <button
+                onClick={() => setDeleteTarget(null)}
+                disabled={deleting}
+                className="flex-1 px-4 py-3 text-sm font-medium text-neutral-600 hover:bg-neutral-50 transition-colors"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={handleDelete}
+                disabled={deleting}
+                className="flex-1 px-4 py-3 text-sm font-medium text-red-600 hover:bg-red-50 border-l border-neutral-200 transition-colors"
+              >
+                {deleting ? 'Excluindo...' : 'Excluir'}
               </button>
             </div>
           </div>
