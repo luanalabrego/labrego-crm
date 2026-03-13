@@ -165,6 +165,7 @@ export default function CrmSidebar({ collapsed, onToggleCollapse, onNavigate }: 
   const pathname = usePathname()
   const router = useRouter()
   const { isSuperAdmin } = useSuperAdmin()
+  const [showLogoutConfirm, setShowLogoutConfirm] = useState(false)
 
   const handleLogout = async () => {
     try {
@@ -425,7 +426,7 @@ export default function CrmSidebar({ collapsed, onToggleCollapse, onNavigate }: 
       {/* Logout */}
       <div className="px-3 py-3 border-t border-white/10">
         <button
-          onClick={handleLogout}
+          onClick={() => setShowLogoutConfirm(true)}
           className={`
             w-full flex items-center gap-3 px-3 py-2.5 rounded-xl transition-all duration-200 group relative
             text-white/60 hover:bg-red-500/10 hover:text-red-400
@@ -443,6 +444,43 @@ export default function CrmSidebar({ collapsed, onToggleCollapse, onNavigate }: 
           )}
         </button>
       </div>
+
+      {/* Popup de confirmação de logout */}
+      {showLogoutConfirm && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center">
+          <div
+            className="absolute inset-0 bg-slate-900/70 backdrop-blur-sm"
+            onClick={() => setShowLogoutConfirm(false)}
+          />
+          <div className="relative bg-slate-800 border border-slate-700 rounded-2xl p-6 w-full max-w-sm mx-4 shadow-2xl animate-in fade-in zoom-in-95 duration-200">
+            <div className="flex flex-col items-center text-center">
+              <div className="w-12 h-12 rounded-full bg-red-500/10 flex items-center justify-center mb-4">
+                <ArrowRightOnRectangleIcon className="w-6 h-6 text-red-400" />
+              </div>
+              <h3 className="text-lg font-semibold text-white mb-2">
+                Sair do aplicativo
+              </h3>
+              <p className="text-sm text-white/60 mb-6">
+                Tem certeza que deseja sair? Você precisará fazer login novamente para acessar o sistema.
+              </p>
+              <div className="flex gap-3 w-full">
+                <button
+                  onClick={() => setShowLogoutConfirm(false)}
+                  className="flex-1 px-4 py-2.5 rounded-xl text-sm font-medium text-white/70 bg-slate-700 hover:bg-slate-600 transition-colors duration-200"
+                >
+                  Cancelar
+                </button>
+                <button
+                  onClick={handleLogout}
+                  className="flex-1 px-4 py-2.5 rounded-xl text-sm font-medium text-white bg-red-500 hover:bg-red-600 transition-colors duration-200"
+                >
+                  Sim, sair
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </nav>
   )
 }
