@@ -411,8 +411,11 @@ export default function FunilDetailPage() {
   const [savingMacroStage, setSavingMacroStage] = useState(false)
   const [deletingMacroStageId, setDeletingMacroStageId] = useState<string | null>(null)
 
+  // Delete client state
+  const [deletingClient, setDeletingClient] = useState<Cliente | null>(null)
+  const [deletingClientLoading, setDeletingClientLoading] = useState(false)
 
-  
+
   // Sorting state for kanban columns
   const [sortDirection, setSortDirection] = useState<Record<string, 'asc' | 'desc'>>({})
   const [sortType, setSortType] = useState<Record<string, 'stageTime' | 'lastContact'>>({})
@@ -1861,6 +1864,34 @@ export default function FunilDetailPage() {
       setDeletingMacroStageId(null)
     } catch (error) {
       console.error('Error deleting macro stage:', error)
+    }
+  }
+
+  // Delete client (card)
+  const handleDeleteClient = async (client: Cliente) => {
+    if (!orgId) return
+    setDeletingClientLoading(true)
+    try {
+      // Delete subcollections (followups and logs)
+      const followupsSnap = await getDocs(collection(db, 'clients', client.id, 'followups'))
+      const logsSnap = await getDocs(collection(db, 'clients', client.id, 'logs'))
+      // Delete related proposals
+      const proposalsSnap = await getDocs(query(collection(db, 'proposals'), where('clientId', '==', client.id)))
+      const batch = writeBatch(db)
+      followupsSnap.docs.forEach((d) => batch.delete(d.ref))
+      logsSnap.docs.forEach((d) => batch.delete(d.ref))
+      proposalsSnap.docs.forEach((d) => batch.delete(d.ref))
+      batch.delete(doc(db, 'clients', client.id))
+      await batch.commit()
+
+      toast.success(`Contato "${client.name}" excluído com sucesso`)
+      setDeletingClient(null)
+      setSelectedClient(null)
+    } catch (error) {
+      console.error('Error deleting client:', error)
+      toast.error('Erro ao excluir contato')
+    } finally {
+      setDeletingClientLoading(false)
     }
   }
 
@@ -6009,6 +6040,48 @@ export default function FunilDetailPage() {
         </div>
       )}
 
+      {/* Delete Client Confirmation */}
+      {deletingClient && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center">
+          <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={() => !deletingClientLoading && setDeletingClient(null)} />
+          <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-md m-4 p-6">
+            <div className="flex items-center gap-4 mb-4">
+              <div className="w-12 h-12 rounded-full bg-red-100 flex items-center justify-center">
+                <TrashIcon className="w-6 h-6 text-red-600" />
+              </div>
+              <div>
+                <h3 className="text-lg font-bold text-slate-800">Excluir contato</h3>
+                <p className="text-sm text-slate-500">Esta ação não pode ser desfeita</p>
+              </div>
+            </div>
+            <p className="text-sm text-slate-600 mb-6">
+              Tem certeza que deseja excluir <strong>{deletingClient.name}</strong>? Todos os dados, anotações e histórico deste contato serão removidos permanentemente.
+            </p>
+            <div className="flex items-center justify-end gap-3">
+              <button
+                onClick={() => setDeletingClient(null)}
+                disabled={deletingClientLoading}
+                className="px-4 py-2.5 text-sm font-medium text-slate-600 hover:bg-slate-100 rounded-xl transition-colors disabled:opacity-50"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={() => handleDeleteClient(deletingClient)}
+                disabled={deletingClientLoading}
+                className="px-4 py-2.5 bg-red-600 text-white rounded-xl font-medium text-sm hover:bg-red-700 transition-colors disabled:opacity-50 flex items-center gap-2"
+              >
+                {deletingClientLoading ? (
+                  <>
+                    <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" /><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" /></svg>
+                    Excluindo...
+                  </>
+                ) : 'Excluir contato'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Client Detail Panel */}
       {selectedClient && (
         <div className="fixed inset-0 z-50 flex">
@@ -6237,12 +6310,21 @@ export default function FunilDetailPage() {
                       )}
                     </div>
                   </div>
-                  <button
-                    onClick={() => setSelectedClient(null)}
-                    className="p-2 rounded-xl hover:bg-white/50 transition-colors"
-                  >
-                    <Cross2Icon className="w-5 h-5 text-slate-500" />
-                  </button>
+                  <div className="flex items-center gap-1">
+                    <button
+                      onClick={() => setDeletingClient(selectedClient)}
+                      className="p-2 rounded-xl hover:bg-red-50 transition-colors group"
+                      title="Excluir contato"
+                    >
+                      <TrashIcon className="w-5 h-5 text-slate-400 group-hover:text-red-500" />
+                    </button>
+                    <button
+                      onClick={() => setSelectedClient(null)}
+                      className="p-2 rounded-xl hover:bg-white/50 transition-colors"
+                    >
+                      <Cross2Icon className="w-5 h-5 text-slate-500" />
+                    </button>
+                  </div>
                 </div>
               </div>
 
