@@ -33,7 +33,7 @@ import type { OrgMember } from '@/types/organization'
 import { usePermissions } from '@/hooks/usePermissions'
 import { useVisibleStages } from '@/hooks/useVisibleStages'
 import { leadSourceOptions, leadSourceIcons, leadTypeOptions } from '@/lib/leadSources'
-import { formatWhatsAppNumber } from '@/lib/format'
+import { formatWhatsAppNumber, maskPhone, maskDocument } from '@/lib/format'
 import AudioPlayer from '@/components/AudioPlayer'
 import RichTextEditor from '@/components/RichTextEditor'
 import {
@@ -543,6 +543,7 @@ export default function FunilDetailPage() {
   const [savingNewContact, setSavingNewContact] = useState(false)
   const [newContactPartners, setNewContactPartners] = useState<string[]>([])
   const [newPartnerInput, setNewPartnerInput] = useState('')
+  const [newContactErrors, setNewContactErrors] = useState<Record<string, string>>({})
 
   // Force cadence modal
   const [forceCadenceStageId, setForceCadenceStageId] = useState<string | null>(null)
@@ -1886,10 +1887,29 @@ export default function FunilDetailPage() {
 
   // Save new contact
   const handleSaveNewContact = async () => {
-    if (!newContactForm.name.trim() || !newContactForm.phone.trim()) {
-      alert('Nome e telefone são obrigatórios')
+    const errors: Record<string, string> = {}
+    if (!newContactForm.name.trim()) {
+      errors.name = 'Nome é obrigatório'
+    }
+    if (!newContactForm.phone.trim()) {
+      errors.phone = 'Telefone é obrigatório'
+    } else if (newContactForm.phone.replace(/\D/g, '').length < 10) {
+      errors.phone = 'Telefone deve ter pelo menos 10 dígitos'
+    }
+    if (newContactForm.email.trim() && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(newContactForm.email.trim())) {
+      errors.email = 'E-mail inválido'
+    }
+    if (newContactForm.document.trim()) {
+      const docDigits = newContactForm.document.replace(/\D/g, '').length
+      if (docDigits !== 11 && docDigits !== 14) {
+        errors.document = 'CPF deve ter 11 dígitos ou CNPJ deve ter 14 dígitos'
+      }
+    }
+    if (Object.keys(errors).length > 0) {
+      setNewContactErrors(errors)
       return
     }
+    setNewContactErrors({})
 
     setSavingNewContact(true)
     try {
@@ -1933,10 +1953,11 @@ export default function FunilDetailPage() {
       setNewContactPhotoPreview(null)
       setNewContactPartners([])
       setNewPartnerInput('')
+      setNewContactErrors({})
       toast.success('Contato adicionado com sucesso!')
     } catch (error) {
       console.error('Erro ao salvar:', error)
-      alert('Erro ao salvar contato')
+      toast.error('Erro ao salvar contato. Tente novamente.')
     } finally {
       setSavingNewContact(false)
     }
@@ -8068,6 +8089,20 @@ export default function FunilDetailPage() {
               </div>
 
               {/* Form fields */}
+              {Object.keys(newContactErrors).length > 0 && (
+                <div className="bg-red-50 border border-red-200 rounded-xl p-4 flex gap-3">
+                  <ExclamationTriangleIcon className="w-5 h-5 text-red-500 flex-shrink-0 mt-0.5" />
+                  <div>
+                    <p className="text-sm font-medium text-red-800">Corrija os seguintes campos para continuar:</p>
+                    <ul className="mt-1 text-sm text-red-600 list-disc list-inside">
+                      {Object.values(newContactErrors).map((err, i) => (
+                        <li key={i}>{err}</li>
+                      ))}
+                    </ul>
+                  </div>
+                </div>
+              )}
+
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <label className="block text-sm font-medium text-slate-700 mb-1.5">
@@ -8078,11 +8113,15 @@ export default function FunilDetailPage() {
                     <input
                       type="text"
                       value={newContactForm.name}
-                      onChange={(e) => setNewContactForm({ ...newContactForm, name: e.target.value })}
+                      onChange={(e) => {
+                        setNewContactForm({ ...newContactForm, name: e.target.value })
+                        if (newContactErrors.name) setNewContactErrors(prev => { const { name, ...rest } = prev; return rest })
+                      }}
                       placeholder="Nome do contato"
-                      className="w-full pl-10 pr-4 py-2.5 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-primary-500/20 focus:border-primary-400 transition-all"
+                      className={`w-full pl-10 pr-4 py-2.5 border rounded-xl text-sm focus:outline-none focus:ring-2 transition-all ${newContactErrors.name ? 'border-red-300 focus:ring-red-500/20 focus:border-red-400' : 'border-slate-200 focus:ring-primary-500/20 focus:border-primary-400'}`}
                     />
                   </div>
+                  {newContactErrors.name && <p className="mt-1 text-xs text-red-500">{newContactErrors.name}</p>}
                 </div>
 
                 <div>
@@ -8094,11 +8133,15 @@ export default function FunilDetailPage() {
                     <input
                       type="text"
                       value={newContactForm.phone}
-                      onChange={(e) => setNewContactForm({ ...newContactForm, phone: e.target.value })}
+                      onChange={(e) => {
+                        setNewContactForm({ ...newContactForm, phone: maskPhone(e.target.value) })
+                        if (newContactErrors.phone) setNewContactErrors(prev => { const { phone, ...rest } = prev; return rest })
+                      }}
                       placeholder="(00) 00000-0000"
-                      className="w-full pl-10 pr-4 py-2.5 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-primary-500/20 focus:border-primary-400 transition-all"
+                      className={`w-full pl-10 pr-4 py-2.5 border rounded-xl text-sm focus:outline-none focus:ring-2 transition-all ${newContactErrors.phone ? 'border-red-300 focus:ring-red-500/20 focus:border-red-400' : 'border-slate-200 focus:ring-primary-500/20 focus:border-primary-400'}`}
                     />
                   </div>
+                  {newContactErrors.phone && <p className="mt-1 text-xs text-red-500">{newContactErrors.phone}</p>}
                 </div>
 
                 <div>
@@ -8108,11 +8151,15 @@ export default function FunilDetailPage() {
                     <input
                       type="email"
                       value={newContactForm.email}
-                      onChange={(e) => setNewContactForm({ ...newContactForm, email: e.target.value })}
+                      onChange={(e) => {
+                        setNewContactForm({ ...newContactForm, email: e.target.value })
+                        if (newContactErrors.email) setNewContactErrors(prev => { const { email, ...rest } = prev; return rest })
+                      }}
                       placeholder="email@exemplo.com"
-                      className="w-full pl-10 pr-4 py-2.5 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-primary-500/20 focus:border-primary-400 transition-all"
+                      className={`w-full pl-10 pr-4 py-2.5 border rounded-xl text-sm focus:outline-none focus:ring-2 transition-all ${newContactErrors.email ? 'border-red-300 focus:ring-red-500/20 focus:border-red-400' : 'border-slate-200 focus:ring-primary-500/20 focus:border-primary-400'}`}
                     />
                   </div>
+                  {newContactErrors.email && <p className="mt-1 text-xs text-red-500">{newContactErrors.email}</p>}
                 </div>
 
                 <div>
@@ -8134,10 +8181,14 @@ export default function FunilDetailPage() {
                   <input
                     type="text"
                     value={newContactForm.document}
-                    onChange={(e) => setNewContactForm({ ...newContactForm, document: e.target.value })}
-                    placeholder="00.000.000/0000-00"
-                    className="w-full px-4 py-2.5 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-primary-500/20 focus:border-primary-400 transition-all"
+                    onChange={(e) => {
+                      setNewContactForm({ ...newContactForm, document: maskDocument(e.target.value) })
+                      if (newContactErrors.document) setNewContactErrors(prev => { const { document, ...rest } = prev; return rest })
+                    }}
+                    placeholder="000.000.000-00"
+                    className={`w-full px-4 py-2.5 border rounded-xl text-sm focus:outline-none focus:ring-2 transition-all ${newContactErrors.document ? 'border-red-300 focus:ring-red-500/20 focus:border-red-400' : 'border-slate-200 focus:ring-primary-500/20 focus:border-primary-400'}`}
                   />
+                  {newContactErrors.document && <p className="mt-1 text-xs text-red-500">{newContactErrors.document}</p>}
                 </div>
 
                 <div>
