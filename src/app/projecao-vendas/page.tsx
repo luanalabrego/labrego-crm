@@ -284,37 +284,39 @@ export default function ProjecaoVendasPage() {
       </div>
 
       {/* KPI Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
-        <div className="bg-white rounded-xl border border-neutral-200 p-5">
-          <div className="flex items-center gap-3">
-            <div className="p-2 bg-blue-50 rounded-lg">
+      <div className="grid grid-cols-3 gap-2 md:gap-4 mb-6 md:mb-8">
+        <div className="bg-white rounded-xl border border-neutral-200 p-3 md:p-5">
+          <div className="flex flex-col md:flex-row md:items-center gap-1 md:gap-3">
+            <div className="hidden md:block p-2 bg-blue-50 rounded-lg">
               <UsersIcon className="w-5 h-5 text-blue-600" />
             </div>
             <div>
-              <p className="text-xs text-neutral-500">Contatos no Pipeline</p>
-              <p className="text-xl font-bold text-neutral-900">{globalTotals.totalContacts}</p>
+              <p className="text-[10px] md:text-xs text-neutral-500 leading-tight">Contatos</p>
+              <p className="text-lg md:text-xl font-bold text-neutral-900">{globalTotals.totalContacts}</p>
             </div>
           </div>
         </div>
-        <div className="bg-white rounded-xl border border-neutral-200 p-5">
-          <div className="flex items-center gap-3">
-            <div className="p-2 bg-emerald-50 rounded-lg">
+        <div className="bg-white rounded-xl border border-neutral-200 p-3 md:p-5">
+          <div className="flex flex-col md:flex-row md:items-center gap-1 md:gap-3">
+            <div className="hidden md:block p-2 bg-emerald-50 rounded-lg">
               <CurrencyDollarIcon className="w-5 h-5 text-emerald-600" />
             </div>
             <div>
-              <p className="text-xs text-neutral-500">Valor Total de Negócios</p>
-              <p className="text-xl font-bold text-neutral-900">{formatCurrency(globalTotals.totalDeal)}</p>
+              <p className="text-[10px] md:text-xs text-neutral-500 leading-tight">Negócios</p>
+              <p className="text-sm font-bold text-neutral-900 md:hidden">{formatCurrencyShort(globalTotals.totalDeal)}</p>
+              <p className="hidden md:block text-xl font-bold text-neutral-900">{formatCurrency(globalTotals.totalDeal)}</p>
             </div>
           </div>
         </div>
-        <div className="bg-white rounded-xl border border-neutral-200 p-5">
-          <div className="flex items-center gap-3">
-            <div className="p-2 bg-amber-50 rounded-lg">
+        <div className="bg-white rounded-xl border border-neutral-200 p-3 md:p-5">
+          <div className="flex flex-col md:flex-row md:items-center gap-1 md:gap-3">
+            <div className="hidden md:block p-2 bg-amber-50 rounded-lg">
               <ArrowTrendingUpIcon className="w-5 h-5 text-amber-600" />
             </div>
             <div>
-              <p className="text-xs text-neutral-500">Valor Esperado Total</p>
-              <p className="text-xl font-bold text-neutral-900">{formatCurrency(globalTotals.totalExpected)}</p>
+              <p className="text-[10px] md:text-xs text-neutral-500 leading-tight">Esperado</p>
+              <p className="text-sm font-bold text-neutral-900 md:hidden">{formatCurrencyShort(globalTotals.totalExpected)}</p>
+              <p className="hidden md:block text-xl font-bold text-neutral-900">{formatCurrency(globalTotals.totalExpected)}</p>
             </div>
           </div>
         </div>
@@ -344,16 +346,128 @@ export default function ProjecaoVendasPage() {
         return (
           <div key={funnel.id} className="mb-8">
             {/* Funnel Header */}
-            <div className="flex items-center gap-3 mb-3">
-              <div className="w-3 h-3 rounded-full" style={{ backgroundColor: funnel.color || '#6366f1' }} />
-              <h2 className="text-lg font-semibold text-neutral-900">{funnel.name}</h2>
-              <span className="text-xs bg-neutral-100 text-neutral-600 px-2 py-0.5 rounded-full">
+            <div className="flex items-center gap-2 md:gap-3 mb-3">
+              <div className="w-2.5 h-2.5 md:w-3 md:h-3 rounded-full flex-shrink-0" style={{ backgroundColor: funnel.color || '#6366f1' }} />
+              <h2 className="text-base md:text-lg font-semibold text-neutral-900 truncate">{funnel.name}</h2>
+              <span className="text-[10px] md:text-xs bg-neutral-100 text-neutral-600 px-1.5 md:px-2 py-0.5 rounded-full whitespace-nowrap flex-shrink-0">
                 {funnelClients.length} contato{funnelClients.length !== 1 ? 's' : ''}
               </span>
             </div>
 
-            {/* Table */}
-            <div className="bg-white rounded-xl border border-neutral-200 overflow-x-auto">
+            {/* Mobile Cards */}
+            <div className="md:hidden space-y-3">
+              {/* Mobile sort selector */}
+              <div className="flex items-center gap-2 mb-2">
+                <span className="text-xs text-neutral-500">Ordenar:</span>
+                <select
+                  value={sortField}
+                  onChange={(e) => {
+                    setSortField(e.target.value as SortField)
+                    setSortDir('desc')
+                  }}
+                  className="text-xs bg-neutral-50 border border-neutral-200 rounded-lg px-2 py-1 focus:outline-none focus:ring-1 focus:ring-primary-500"
+                >
+                  <option value="expectedValue">Valor Esperado</option>
+                  <option value="dealValue">Valor Negócio</option>
+                  <option value="probability">Probabilidade</option>
+                  <option value="name">Nome</option>
+                  <option value="daysInStage">Dias na Etapa</option>
+                  <option value="lastContact">Último Contato</option>
+                </select>
+                <button
+                  onClick={() => setSortDir(prev => prev === 'asc' ? 'desc' : 'asc')}
+                  className="p-1 rounded border border-neutral-200 bg-neutral-50"
+                >
+                  {sortDir === 'asc' ? <ChevronUpIcon className="w-3 h-3" /> : <ChevronDownIcon className="w-3 h-3" />}
+                </button>
+              </div>
+
+              {funnelClients.map(client => {
+                const stage = stages.find(s => s.id === client.funnelStage)
+                const prob = getClientProbability(client, stage)
+                const expected = (client.dealValue || 0) * prob / 100
+                const daysInStage = client.funnelStageUpdatedAt
+                  ? Math.floor((Date.now() - new Date(client.funnelStageUpdatedAt).getTime()) / 86400000)
+                  : null
+                const lastContact = client.lastFollowUpAt
+                  ? new Date(client.lastFollowUpAt).toLocaleDateString('pt-BR')
+                  : 'Sem contato'
+
+                return (
+                  <div key={client.id} className="bg-white rounded-xl border border-neutral-200 p-4">
+                    {/* Card header: name + expected value */}
+                    <div className="flex items-start justify-between mb-3">
+                      <Link href={`/contatos/${client.id}`} className="text-primary-600 hover:underline font-semibold text-sm leading-tight flex-1 mr-2">
+                        {client.name}
+                      </Link>
+                      <span className="text-sm font-bold text-emerald-700 whitespace-nowrap">
+                        {formatCurrencyShort(expected)}
+                      </span>
+                    </div>
+
+                    {/* Stage select */}
+                    <div className="mb-3">
+                      <select
+                        defaultValue={client.funnelStage || ''}
+                        key={`stage-m-${client.id}`}
+                        onChange={(e) => handleInlineStageChange(client.id, e.target.value, funnel.id)}
+                        className="w-full px-2 py-1.5 text-xs bg-neutral-50 border border-neutral-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-primary-500"
+                      >
+                        {funnelStages.map(s => (
+                          <option key={s.id} value={s.id}>{s.name}</option>
+                        ))}
+                      </select>
+                    </div>
+
+                    {/* Inline fields row */}
+                    <div className="grid grid-cols-2 gap-2 mb-3">
+                      <div>
+                        <label className="text-[10px] text-neutral-400 uppercase tracking-wider">Valor (R$)</label>
+                        <input
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          defaultValue={client.dealValue ?? ''}
+                          key={`deal-m-${client.id}`}
+                          onBlur={(e) => handleInlineDealValue(client.id, e.target.value)}
+                          className="w-full px-2 py-1.5 text-xs bg-neutral-50 border border-neutral-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-primary-500"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-[10px] text-neutral-400 uppercase tracking-wider">Prob. (%)</label>
+                        <input
+                          type="number"
+                          min="0"
+                          max="100"
+                          defaultValue={client.closingProbability ?? stage?.probability ?? 0}
+                          key={`prob-m-${client.id}`}
+                          onBlur={(e) => handleInlineProbability(client.id, e.target.value)}
+                          className="w-full px-2 py-1.5 text-xs bg-neutral-50 border border-neutral-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-primary-500"
+                        />
+                      </div>
+                    </div>
+
+                    {/* Meta info */}
+                    <div className="flex items-center justify-between text-[11px] text-neutral-400 border-t border-neutral-100 pt-2">
+                      <span>{daysInStage !== null ? `${daysInStage}d na etapa` : 'Sem dados'}</span>
+                      <span>{lastContact}</span>
+                    </div>
+                  </div>
+                )
+              })}
+
+              {/* Mobile totals */}
+              <div className="bg-neutral-50 rounded-xl border border-neutral-200 p-4 flex items-center justify-between">
+                <span className="text-sm font-semibold text-neutral-700">Total</span>
+                <div className="text-right">
+                  <p className="text-xs text-neutral-500">Negócios: <span className="font-semibold text-neutral-700">{formatCurrencyShort(totalDeal)}</span></p>
+                  <p className="text-xs text-neutral-500">Esperado: <span className="font-bold text-emerald-700">{formatCurrencyShort(totalExpected)}</span></p>
+                </div>
+              </div>
+            </div>
+
+            {/* Desktop Table */}
+            <div className="hidden md:block bg-white rounded-xl border border-neutral-200 overflow-x-auto">
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b border-neutral-100 bg-neutral-50/50">
