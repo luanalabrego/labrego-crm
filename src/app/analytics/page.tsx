@@ -139,6 +139,63 @@ function formatPct(val: number): string {
   return val.toFixed(1) + '%'
 }
 
+/* ─── Shared export styles (mirrors funil/[funnelId] design) ─── */
+function getExcelStyles() {
+  const primaryDark = '0BBDD6'
+  const headerFontColor = 'FFFFFF'
+  const lightBg = 'F0FDFF'
+  const borderColor = 'D1D5DB'
+
+  const headerStyle = {
+    font: { bold: true, color: { rgb: headerFontColor }, sz: 11, name: 'Calibri' },
+    fill: { fgColor: { rgb: primaryDark } },
+    alignment: { horizontal: 'center' as const, vertical: 'center' as const, wrapText: true },
+    border: {
+      top: { style: 'thin' as const, color: { rgb: primaryDark } },
+      bottom: { style: 'thin' as const, color: { rgb: primaryDark } },
+      left: { style: 'thin' as const, color: { rgb: primaryDark } },
+      right: { style: 'thin' as const, color: { rgb: primaryDark } },
+    },
+  }
+
+  const cellBorder = {
+    top: { style: 'thin' as const, color: { rgb: borderColor } },
+    bottom: { style: 'thin' as const, color: { rgb: borderColor } },
+    left: { style: 'thin' as const, color: { rgb: borderColor } },
+    right: { style: 'thin' as const, color: { rgb: borderColor } },
+  }
+
+  const cellStyleEven = {
+    font: { sz: 10, name: 'Calibri', color: { rgb: '333333' } },
+    alignment: { vertical: 'center' as const, wrapText: true },
+    border: cellBorder,
+  }
+
+  const cellStyleOdd = {
+    ...cellStyleEven,
+    fill: { fgColor: { rgb: lightBg } },
+  }
+
+  return { primaryDark, headerStyle, cellStyleEven, cellStyleOdd }
+}
+
+function buildTitleRows(title: string, subtitle?: string) {
+  const { primaryDark } = getExcelStyles()
+  const titleRow = [{
+    v: title,
+    s: { font: { bold: true, sz: 14, color: { rgb: primaryDark }, name: 'Calibri' }, alignment: { horizontal: 'left' as const, vertical: 'center' as const } },
+  }]
+  const dateRow = [{
+    v: `Gerado em: ${new Date().toLocaleDateString('pt-BR')} às ${new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}`,
+    s: { font: { sz: 10, color: { rgb: '666666' }, italic: true, name: 'Calibri' }, alignment: { horizontal: 'left' as const } },
+  }]
+  const subRow = subtitle ? [{
+    v: subtitle,
+    s: { font: { sz: 10, bold: true, color: { rgb: '444444' }, name: 'Calibri' }, alignment: { horizontal: 'left' as const } },
+  }] : null
+  return { titleRow, dateRow, subRow }
+}
+
 /* ═══════════════════════════════════════════════════════════ */
 /*  TOOLTIP                                                   */
 /* ═══════════════════════════════════════════════════════════ */
@@ -239,65 +296,422 @@ function AnalyticsDashboard() {
     return stagesRef.current.filter(s => s.funnelId === selectedFunnel)
   }, [selectedFunnel, dataVersion]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  /* ─── Export ─── */
+  /* ─── Export PDF ─── */
   const handleExportPDF = useCallback(async () => {
-    const el = document.getElementById('analytics-content')
-    if (!el) return
-    const html2canvas = (await import('html2canvas-pro')).default
-    const { jsPDF } = await import('jspdf')
-    const canvas = await html2canvas(el, { scale: 2, useCORS: true })
-    const imgData = canvas.toDataURL('image/png')
-    const pdf = new jsPDF('l', 'mm', 'a4')
-    const w = pdf.internal.pageSize.getWidth()
-    const h = (canvas.height * w) / canvas.width
-    pdf.addImage(imgData, 'PNG', 0, 0, w, h)
-    pdf.save(`analytics-${activeTab}-${new Date().toISOString().slice(0, 10)}.pdf`)
-  }, [activeTab])
+    const { default: jsPDF } = await import('jspdf')
+    const { default: autoTable } = await import('jspdf-autotable')
+    const doc = new jsPDF()
+    const tabLabel = TABS.find(t => t.id === activeTab)?.label || activeTab
 
-  const handleExportExcel = useCallback(async () => {
-    const XLSX = await import('xlsx')
-    const wb = XLSX.utils.book_new()
+    // Header
+    doc.setFontSize(22)
+    doc.setTextColor(19, 222, 252)
+    doc.text('Voxium', 14, 20)
+    doc.setFontSize(10)
+    doc.setTextColor(100, 100, 100)
+    doc.text(`Análises & Insights — ${tabLabel}`, 14, 28)
+    doc.text(`Gerado em: ${new Date().toLocaleDateString('pt-BR')}`, 14, 34)
+
+    let yPos = 44
 
     if (activeTab === 'overview') {
       const kpis = calcOverviewKPIs(filteredClients, periodStart)
-      const data = [
-        { Métrica: 'Total de Contatos', Valor: kpis.totalContacts },
-        { Métrica: 'Leads Novos', Valor: kpis.newLeads },
-        { Métrica: 'Ativos', Valor: kpis.activeCount },
-        { Métrica: 'Inativos', Valor: kpis.inactiveCount },
-        { Métrica: 'Taxa de Conversão (%)', Valor: Number(kpis.conversionRate.toFixed(1)) },
-        { Métrica: 'Tempo Médio Conversão (dias)', Valor: kpis.avgConversionDays },
-        { Métrica: 'Sem Atividade 30d+', Valor: kpis.dormant30 },
-        { Métrica: 'Sem Atividade 60d+', Valor: kpis.dormant60 },
-      ]
-      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(data), 'Visão Geral')
+      const pipeKpis = calcPipelineKPIs(filteredClients)
+      const frtKpis = calcFrtKPIs(filteredClients)
+      const formatBRL = (v: number) => new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(v)
+
+      doc.setFontSize(14)
+      doc.setTextColor(30, 30, 30)
+      doc.text('KPIs Gerais', 14, yPos)
+      yPos += 6
+
+      autoTable(doc, {
+        startY: yPos,
+        head: [['Métrica', 'Valor']],
+        body: [
+          ['Total de Contatos', String(kpis.totalContacts)],
+          ['Leads Novos (no período)', String(kpis.newLeads)],
+          ['Contatos Ativos', String(kpis.activeCount)],
+          ['Contatos Inativos', String(kpis.inactiveCount)],
+          ['Taxa de Conversão', `${kpis.conversionRate.toFixed(1)}%`],
+          ['Tempo Médio Conversão', `${kpis.avgConversionDays} dias`],
+          ['Sem Atividade 30d+', String(kpis.dormant30)],
+          ['Sem Atividade 60d+', String(kpis.dormant60)],
+          ['Pipeline Total', formatBRL(pipeKpis.totalPipelineValue)],
+          ['Ticket Médio', formatBRL(pipeKpis.ticketMedio)],
+          ['Negócios com Valor', String(pipeKpis.clientsWithDeal)],
+          ['FRT Médio', frtKpis.avgFrtHours < 1 ? `${Math.round(frtKpis.avgFrtHours * 60)}min` : `${frtKpis.avgFrtHours.toFixed(1)}h`],
+          ['Sem 1º Contato', String(frtKpis.totalWithoutFrt)],
+        ],
+        theme: 'striped',
+        headStyles: { fillColor: [19, 222, 252] },
+      })
+
+      // Value by stage table
+      const valueByStage = calcValueByStage(filteredClients, filteredStages)
+      if (valueByStage.length > 0) {
+         
+        const lastY = (doc as any).lastAutoTable?.finalY || yPos + 80
+        doc.setFontSize(14)
+        doc.setTextColor(30, 30, 30)
+        doc.text('Valor do Pipeline por Etapa', 14, lastY + 10)
+        autoTable(doc, {
+          startY: lastY + 16,
+          head: [['Etapa', 'Valor', 'Negócios']],
+          body: valueByStage.map(s => [s.name, formatBRL(s.value), String(s.count)]),
+          theme: 'striped',
+          headStyles: { fillColor: [19, 222, 252] },
+        })
+      }
+
+      // FRT by Seller
+      if (frtKpis.bySeller.length > 0) {
+         
+        const lastY2 = (doc as any).lastAutoTable?.finalY || yPos + 120
+        if (lastY2 > 240) doc.addPage()
+        const startY = lastY2 > 240 ? 20 : lastY2 + 10
+        doc.setFontSize(14)
+        doc.setTextColor(30, 30, 30)
+        doc.text('First Response Time por Vendedor', 14, startY)
+        autoTable(doc, {
+          startY: startY + 6,
+          head: [['Vendedor', 'FRT Médio', 'Contatos', 'SLA']],
+          body: frtKpis.bySeller.map(s => [
+            s.seller,
+            s.avgFrtHours < 1 ? `${Math.round(s.avgFrtHours * 60)}min` : `${s.avgFrtHours.toFixed(1)}h`,
+            String(s.contactCount),
+            s.slaColor === 'green' ? 'OK' : s.slaColor === 'yellow' ? 'Atenção' : 'Crítico',
+          ]),
+          theme: 'striped',
+          headStyles: { fillColor: [19, 222, 252] },
+        })
+      }
     } else if (activeTab === 'aging') {
       const { matrix, stageNames } = calcAgingMatrix(filteredClients, filteredStages)
-      const data = stageNames.map(name => {
-        const row: Record<string, string | number> = { Etapa: name }
-        for (const band of AGING_BANDS) {
-          row[band] = matrix[name]?.[band]?.length || 0
-        }
-        return row
+      const kpis = calcOverviewKPIs(filteredClients, new Date(0).toISOString())
+
+      doc.setFontSize(14)
+      doc.setTextColor(30, 30, 30)
+      doc.text('Aging de Contatos', 14, yPos)
+      yPos += 4
+      doc.setFontSize(10)
+      doc.text(`Sem atividade 30d+: ${kpis.dormant30} | 60d+: ${kpis.dormant60}`, 14, yPos + 4)
+      yPos += 10
+
+      autoTable(doc, {
+        startY: yPos,
+        head: [['Etapa', ...AGING_BANDS]],
+        body: stageNames.map(name => [
+          name,
+          ...AGING_BANDS.map(band => String(matrix[name]?.[band]?.length || 0)),
+        ]),
+        theme: 'striped',
+        headStyles: { fillColor: [19, 222, 252] },
       })
-      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(data), 'Aging')
     } else if (activeTab === 'conversion') {
-      const rows = calcConversionByDimension(filteredClients, 'leadSource')
-      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows.map(r => ({
-        Dimensão: r.dimension, Total: r.total, Convertidos: r.converted, 'Taxa (%)': Number(r.rate.toFixed(1)), 'Tempo Médio (dias)': r.avgDays,
-      }))), 'Conversão')
+      const allDimensions = Object.keys(DIMENSION_LABELS) as ConversionDimension[]
+      for (const dim of allDimensions) {
+        const rows = calcConversionByDimension(filteredClients, dim)
+        if (rows.length === 0) continue
+
+        if (yPos > 240) { doc.addPage(); yPos = 20 }
+        doc.setFontSize(14)
+        doc.setTextColor(30, 30, 30)
+        doc.text(`Conversão por ${DIMENSION_LABELS[dim]}`, 14, yPos)
+        yPos += 6
+
+        autoTable(doc, {
+          startY: yPos,
+          head: [[DIMENSION_LABELS[dim], 'Total', 'Convertidos', 'Taxa (%)', 'Tempo Médio (dias)']],
+          body: rows.map(r => [r.dimension, String(r.total), String(r.converted), `${r.rate.toFixed(1)}%`, String(r.avgDays || '—')]),
+          theme: 'striped',
+          headStyles: { fillColor: [19, 222, 252] },
+        })
+         
+        yPos = ((doc as any).lastAutoTable?.finalY || yPos + 40) + 10
+      }
     } else if (activeTab === 'profile') {
       const activeClients = filteredClients.filter(c => c.status === 'Ativo')
-      const data = calcDistribution(activeClients, 'industry')
-      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(data.map(d => ({
-        Nome: d.name, Quantidade: d.value, 'Percentual (%)': d.percent,
-      }))), 'Perfil')
+      for (const pf of PROFILE_FIELDS) {
+        const data = calcDistribution(activeClients, pf.field).slice(0, 15)
+        if (data.length === 0) continue
+
+        if (yPos > 240) { doc.addPage(); yPos = 20 }
+        doc.setFontSize(14)
+        doc.setTextColor(30, 30, 30)
+        doc.text(pf.label, 14, yPos)
+        yPos += 6
+
+        autoTable(doc, {
+          startY: yPos,
+          head: [['Nome', 'Quantidade', 'Percentual (%)']],
+          body: data.map(d => [d.name, String(d.value), `${d.percent}%`]),
+          theme: 'striped',
+          headStyles: { fillColor: [19, 222, 252] },
+        })
+         
+        yPos = ((doc as any).lastAutoTable?.finalY || yPos + 40) + 10
+      }
     } else if (activeTab === 'opportunities') {
+      const funnelData = calcFunnelData(filteredClients, filteredStages)
+      const topOpps = calcTopOpportunities(filteredClients, filteredStages)
+      const bottlenecks = calcBottleneckStages(filteredClients, filteredStages)
+
+      // Funnel summary
+      if (funnelData.length > 0) {
+        doc.setFontSize(14)
+        doc.setTextColor(30, 30, 30)
+        doc.text('Funil de Vendas', 14, yPos)
+        yPos += 6
+
+        autoTable(doc, {
+          startY: yPos,
+          head: [['Etapa', 'Contatos', 'Conversão (%)', 'Dias Média']],
+          body: funnelData.map((s, i) => [s.name, String(s.count), i > 0 ? `${s.conversionRate.toFixed(1)}%` : '—', String(s.avgDays)]),
+          theme: 'striped',
+          headStyles: { fillColor: [19, 222, 252] },
+        })
+         
+        yPos = ((doc as any).lastAutoTable?.finalY || yPos + 40) + 10
+      }
+
+      // Bottlenecks
+      if (bottlenecks.length > 0) {
+        if (yPos > 240) { doc.addPage(); yPos = 20 }
+        doc.setFontSize(14)
+        doc.setTextColor(30, 30, 30)
+        doc.text('Gargalos Identificados', 14, yPos)
+        yPos += 6
+
+        autoTable(doc, {
+          startY: yPos,
+          head: [['Etapa', 'Dias Média', 'Máx Dias', 'Contatos', 'Atrasados']],
+          body: bottlenecks.map(b => [b.name, String(b.avgDays), String(b.maxDays), String(b.contactCount), String(b.overdueCount)]),
+          theme: 'striped',
+          headStyles: { fillColor: [19, 222, 252] },
+        })
+         
+        yPos = ((doc as any).lastAutoTable?.finalY || yPos + 40) + 10
+      }
+
+      // Top opportunities
+      if (topOpps.length > 0) {
+        if (yPos > 200) { doc.addPage(); yPos = 20 }
+        doc.setFontSize(14)
+        doc.setTextColor(30, 30, 30)
+        doc.text('Top Oportunidades Quentes', 14, yPos)
+        yPos += 6
+
+        autoTable(doc, {
+          startY: yPos,
+          head: [['Nome', 'Empresa', 'Etapa', 'Prob.', 'Dias', 'Status']],
+          body: topOpps.slice(0, 50).map(o => [o.name, o.company || '—', o.stage, `${o.probability}%`, String(o.daysInStage), o.isOverdue ? 'Atrasado' : 'No prazo']),
+          theme: 'striped',
+          headStyles: { fillColor: [19, 222, 252] },
+        })
+      }
+    }
+
+    doc.save(`analytics-${activeTab}-${new Date().toISOString().slice(0, 10)}.pdf`)
+  }, [activeTab, filteredClients, filteredStages, periodStart])
+
+  /* ─── Export Excel ─── */
+  const handleExportExcel = useCallback(async () => {
+    const XLSX = await import('xlsx-js-style')
+    const wb = XLSX.utils.book_new()
+    const styles = getExcelStyles()
+    const tabLabel = TABS.find(t => t.id === activeTab)?.label || activeTab
+
+    const buildSheet = (
+      headers: string[],
+      dataRows: (string | number)[][],
+      sheetTitle: string,
+      subtitle?: string,
+      colWidths?: number[],
+    ) => {
+      const { titleRow, dateRow, subRow } = buildTitleRows(`Análises — ${sheetTitle}`, subtitle)
+      const styledHeaders = headers.map(h => ({ v: h, s: styles.headerStyle }))
+
+      const rows = dataRows.map((row, idx) => {
+        const style = idx % 2 === 0 ? styles.cellStyleEven : styles.cellStyleOdd
+        const centerStyle = { ...style, alignment: { ...style.alignment, horizontal: 'center' as const } }
+        return row.map((cell, ci) => ({ v: cell, s: ci === 0 ? style : centerStyle }))
+      })
+
+      const sheetData = subRow
+        ? [titleRow, dateRow, subRow, [], styledHeaders, ...rows]
+        : [titleRow, dateRow, [], styledHeaders, ...rows]
+
+      const ws = XLSX.utils.aoa_to_sheet(sheetData)
+
+      const mergeRows = subRow ? 3 : 2
+      ws['!merges'] = Array.from({ length: mergeRows }, (_, i) => ({
+        s: { r: i, c: 0 }, e: { r: i, c: headers.length - 1 },
+      }))
+
+      ws['!cols'] = (colWidths || headers.map(() => 20)).map(w => ({ wch: w }))
+
+      ws['!rows'] = [
+        { hpt: 30 }, // Title
+        { hpt: 18 }, // Date
+        ...(subRow ? [{ hpt: 18 }] : []), // Subtitle
+        { hpt: 10 }, // Blank spacer
+        { hpt: 28 }, // Headers
+        ...rows.map(() => ({ hpt: 22 })),
+      ]
+
+      return ws
+    }
+
+    if (activeTab === 'overview') {
+      const kpis = calcOverviewKPIs(filteredClients, periodStart)
+      const pipeKpis = calcPipelineKPIs(filteredClients)
+      const frtKpis = calcFrtKPIs(filteredClients)
+      const formatBRL = (v: number) => new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(v)
+
+      const ws = buildSheet(
+        ['Métrica', 'Valor'],
+        [
+          ['Total de Contatos', kpis.totalContacts],
+          ['Leads Novos (no período)', kpis.newLeads],
+          ['Contatos Ativos', kpis.activeCount],
+          ['Contatos Inativos', kpis.inactiveCount],
+          ['Taxa de Conversão (%)', `${kpis.conversionRate.toFixed(1)}%`],
+          ['Tempo Médio Conversão (dias)', kpis.avgConversionDays],
+          ['Sem Atividade 30d+', kpis.dormant30],
+          ['Sem Atividade 60d+', kpis.dormant60],
+          ['Pipeline Total', formatBRL(pipeKpis.totalPipelineValue)],
+          ['Ticket Médio', formatBRL(pipeKpis.ticketMedio)],
+          ['Negócios com Valor', pipeKpis.clientsWithDeal],
+          ['FRT Médio', frtKpis.avgFrtHours < 1 ? `${Math.round(frtKpis.avgFrtHours * 60)}min` : `${frtKpis.avgFrtHours.toFixed(1)}h`],
+          ['Sem 1º Contato', frtKpis.totalWithoutFrt],
+        ],
+        tabLabel,
+        `Total de contatos: ${kpis.totalContacts}`,
+        [40, 24],
+      )
+      XLSX.utils.book_append_sheet(wb, ws, 'Visão Geral')
+
+      // Value by stage sheet
+      const valueByStage = calcValueByStage(filteredClients, filteredStages)
+      if (valueByStage.length > 0) {
+        const ws2 = buildSheet(
+          ['Etapa', 'Valor', 'Negócios'],
+          valueByStage.map(s => [s.name, formatBRL(s.value), s.count]),
+          'Pipeline por Etapa',
+          undefined,
+          [28, 24, 16],
+        )
+        XLSX.utils.book_append_sheet(wb, ws2, 'Pipeline por Etapa')
+      }
+
+      // FRT sheet
+      if (frtKpis.bySeller.length > 0) {
+        const ws3 = buildSheet(
+          ['Vendedor', 'FRT Médio', 'Contatos', 'SLA'],
+          frtKpis.bySeller.map(s => [
+            s.seller,
+            s.avgFrtHours < 1 ? `${Math.round(s.avgFrtHours * 60)}min` : `${s.avgFrtHours.toFixed(1)}h`,
+            s.contactCount,
+            s.slaColor === 'green' ? 'OK' : s.slaColor === 'yellow' ? 'Atenção' : 'Crítico',
+          ]),
+          'FRT por Vendedor',
+          `FRT médio geral: ${frtKpis.avgFrtHours < 1 ? `${Math.round(frtKpis.avgFrtHours * 60)}min` : `${frtKpis.avgFrtHours.toFixed(1)}h`}`,
+          [28, 16, 14, 14],
+        )
+        XLSX.utils.book_append_sheet(wb, ws3, 'FRT')
+      }
+    } else if (activeTab === 'aging') {
+      const { matrix, stageNames } = calcAgingMatrix(filteredClients, filteredStages)
+      const kpis = calcOverviewKPIs(filteredClients, new Date(0).toISOString())
+      const headers = ['Etapa', ...AGING_BANDS]
+
+      const ws = buildSheet(
+        headers,
+        stageNames.map(name => [
+          name,
+          ...AGING_BANDS.map(band => matrix[name]?.[band]?.length || 0),
+        ]),
+        tabLabel,
+        `Sem atividade 30d+: ${kpis.dormant30} | 60d+: ${kpis.dormant60}`,
+        [24, 12, 12, 12, 12, 12, 12],
+      )
+      XLSX.utils.book_append_sheet(wb, ws, 'Aging')
+    } else if (activeTab === 'conversion') {
+      // Export ALL dimensions, each as a separate sheet
+      const allDimensions = Object.keys(DIMENSION_LABELS) as ConversionDimension[]
+      for (const dim of allDimensions) {
+        const rows = calcConversionByDimension(filteredClients, dim)
+        if (rows.length === 0) continue
+
+        const dimLabel = DIMENSION_LABELS[dim]
+        const ws = buildSheet(
+          [dimLabel, 'Total', 'Convertidos', 'Taxa (%)', 'Tempo Médio (dias)'],
+          rows.map(r => [r.dimension, r.total, r.converted, `${r.rate.toFixed(1)}%`, r.avgDays || '—']),
+          `Conversão — ${dimLabel}`,
+          undefined,
+          [28, 12, 16, 14, 20],
+        )
+        // Sheet name max 31 chars
+        const sheetName = dimLabel.length > 31 ? dimLabel.slice(0, 31) : dimLabel
+        XLSX.utils.book_append_sheet(wb, ws, sheetName)
+      }
+    } else if (activeTab === 'profile') {
+      const activeClients = filteredClients.filter(c => c.status === 'Ativo')
+      // Export ALL profile fields, each as a separate sheet
+      for (const pf of PROFILE_FIELDS) {
+        const data = calcDistribution(activeClients, pf.field)
+        if (data.length === 0) continue
+
+        const ws = buildSheet(
+          ['Nome', 'Quantidade', 'Percentual (%)'],
+          data.map(d => [d.name, d.value, `${d.percent}%`]),
+          pf.label,
+          `Total de clientes ativos: ${activeClients.length}`,
+          [30, 16, 18],
+        )
+        const sheetName = pf.label.length > 31 ? pf.label.slice(0, 31) : pf.label
+        XLSX.utils.book_append_sheet(wb, ws, sheetName)
+      }
+    } else if (activeTab === 'opportunities') {
+      // Funnel data sheet
+      const funnelData = calcFunnelData(filteredClients, filteredStages)
+      if (funnelData.length > 0) {
+        const ws1 = buildSheet(
+          ['Etapa', 'Contatos', 'Conversão (%)', 'Dias Média'],
+          funnelData.map((s, i) => [s.name, s.count, i > 0 ? `${s.conversionRate.toFixed(1)}%` : '—', s.avgDays]),
+          'Funil de Vendas',
+          undefined,
+          [28, 14, 18, 16],
+        )
+        XLSX.utils.book_append_sheet(wb, ws1, 'Funil')
+      }
+
+      // Bottlenecks sheet
+      const bottlenecks = calcBottleneckStages(filteredClients, filteredStages)
+      if (bottlenecks.length > 0) {
+        const ws2 = buildSheet(
+          ['Etapa', 'Dias Média', 'Máx Dias', 'Contatos', 'Atrasados'],
+          bottlenecks.map(b => [b.name, b.avgDays, b.maxDays, b.contactCount, b.overdueCount]),
+          'Gargalos',
+          undefined,
+          [28, 14, 14, 14, 14],
+        )
+        XLSX.utils.book_append_sheet(wb, ws2, 'Gargalos')
+      }
+
+      // Top opportunities sheet
       const items = calcTopOpportunities(filteredClients, filteredStages)
-      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(items.slice(0, 50).map(o => ({
-        Nome: o.name, Empresa: o.company, Etapa: o.stage, Probabilidade: o.probability,
-        'Dias na Etapa': o.daysInStage, 'Máx Dias': o.maxDays, Atrasado: o.isOverdue ? 'Sim' : 'Não',
-      }))), 'Oportunidades')
+      if (items.length > 0) {
+        const ws3 = buildSheet(
+          ['Nome', 'Empresa', 'Etapa', 'Probabilidade', 'Dias na Etapa', 'Máx Dias', 'Status'],
+          items.slice(0, 50).map(o => [o.name, o.company || '—', o.stage, `${o.probability}%`, o.daysInStage, o.maxDays, o.isOverdue ? 'Atrasado' : 'No prazo']),
+          'Top Oportunidades',
+          `${items.length} oportunidades quentes identificadas`,
+          [28, 24, 20, 16, 16, 14, 14],
+        )
+        XLSX.utils.book_append_sheet(wb, ws3, 'Oportunidades')
+      }
     }
 
     XLSX.writeFile(wb, `analytics-${activeTab}-${new Date().toISOString().slice(0, 10)}.xlsx`)
