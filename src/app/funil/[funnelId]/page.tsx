@@ -2092,25 +2092,157 @@ export default function FunilDetailPage() {
   const handleExportExcel = async () => {
     setExportingExcel(true)
     try {
-      const XLSX = await import('xlsx')
+      const XLSX = await import('xlsx-js-style')
       const exportClients = getReportClients()
-      const data = exportClients.map((c) => ({
-        Nome: c.name || '',
-        Empresa: c.company || '',
-        Telefone: c.phone || '',
-        Email: c.email || '',
-        Etapa: funnelStages.find((s) => s.id === c.funnelStage)?.name || '',
-        Responsável: c.assignedToName || 'Sem responsável',
-        'Dias na Etapa': c.funnelStageUpdatedAt
-          ? Math.floor((Date.now() - new Date(c.funnelStageUpdatedAt).getTime()) / 86400000)
-          : '',
-        'Último Follow-up': c.lastFollowUpAt
-          ? new Date(c.lastFollowUpAt).toLocaleDateString('pt-BR')
-          : '',
-        Status: c.status || '',
-        'Data Cadastro': c.createdAt ? new Date(c.createdAt).toLocaleDateString('pt-BR') : '',
-      }))
-      const ws = XLSX.utils.json_to_sheet(data)
+
+      // App primary color: #13DEFC (cyan)
+      const primaryColor = '13DEFC'
+      const primaryDark = '0BBDD6'
+      const headerFontColor = 'FFFFFF'
+      const lightBg = 'F0FDFF'
+      const borderColor = 'D1D5DB'
+
+      const headers = [
+        'Nome',
+        'Empresa',
+        'Telefone',
+        'Email',
+        'Etapa',
+        'Responsável',
+        'Dias na Etapa',
+        'Último Follow-up',
+        'Status',
+        'Data Cadastro',
+      ]
+
+      const headerStyle = {
+        font: { bold: true, color: { rgb: headerFontColor }, sz: 11, name: 'Calibri' },
+        fill: { fgColor: { rgb: primaryDark } },
+        alignment: { horizontal: 'center' as const, vertical: 'center' as const, wrapText: true },
+        border: {
+          top: { style: 'thin' as const, color: { rgb: primaryDark } },
+          bottom: { style: 'thin' as const, color: { rgb: primaryDark } },
+          left: { style: 'thin' as const, color: { rgb: primaryDark } },
+          right: { style: 'thin' as const, color: { rgb: primaryDark } },
+        },
+      }
+
+      const cellBorder = {
+        top: { style: 'thin' as const, color: { rgb: borderColor } },
+        bottom: { style: 'thin' as const, color: { rgb: borderColor } },
+        left: { style: 'thin' as const, color: { rgb: borderColor } },
+        right: { style: 'thin' as const, color: { rgb: borderColor } },
+      }
+
+      const cellStyleEven = {
+        font: { sz: 10, name: 'Calibri', color: { rgb: '333333' } },
+        alignment: { vertical: 'center' as const, wrapText: true },
+        border: cellBorder,
+      }
+
+      const cellStyleOdd = {
+        ...cellStyleEven,
+        fill: { fgColor: { rgb: lightBg } },
+      }
+
+      // Build title row
+      const titleRow = [
+        {
+          v: `Relatório do Funil: ${funnelName}`,
+          s: {
+            font: { bold: true, sz: 14, color: { rgb: primaryDark }, name: 'Calibri' },
+            alignment: { horizontal: 'left' as const, vertical: 'center' as const },
+          },
+        },
+      ]
+
+      const dateRow = [
+        {
+          v: `Gerado em: ${new Date().toLocaleDateString('pt-BR')} às ${new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}`,
+          s: {
+            font: { sz: 10, color: { rgb: '666666' }, italic: true, name: 'Calibri' },
+            alignment: { horizontal: 'left' as const },
+          },
+        },
+      ]
+
+      const totalRow = [
+        {
+          v: `Total de contatos: ${exportClients.length}`,
+          s: {
+            font: { sz: 10, bold: true, color: { rgb: '444444' }, name: 'Calibri' },
+            alignment: { horizontal: 'left' as const },
+          },
+        },
+      ]
+
+      // Build header row with styles
+      const styledHeaders = headers.map((h) => ({ v: h, s: headerStyle }))
+
+      // Build data rows with alternating colors
+      const rows = exportClients.map((c, idx) => {
+        const style = idx % 2 === 0 ? cellStyleEven : cellStyleOdd
+        const centerStyle = { ...style, alignment: { ...style.alignment, horizontal: 'center' as const } }
+        return [
+          { v: c.name || '', s: style },
+          { v: c.company || '', s: style },
+          { v: c.phone || '', s: centerStyle },
+          { v: c.email || '', s: style },
+          { v: funnelStages.find((st) => st.id === c.funnelStage)?.name || '', s: centerStyle },
+          { v: c.assignedToName || 'Sem responsável', s: centerStyle },
+          {
+            v: c.funnelStageUpdatedAt
+              ? Math.floor((Date.now() - new Date(c.funnelStageUpdatedAt).getTime()) / 86400000)
+              : '',
+            s: centerStyle,
+          },
+          {
+            v: c.lastFollowUpAt ? new Date(c.lastFollowUpAt).toLocaleDateString('pt-BR') : '',
+            s: centerStyle,
+          },
+          { v: c.status || '', s: centerStyle },
+          {
+            v: c.createdAt ? new Date(c.createdAt).toLocaleDateString('pt-BR') : '',
+            s: centerStyle,
+          },
+        ]
+      })
+
+      // Assemble sheet: title + date + total + blank + headers + data
+      const sheetData = [titleRow, dateRow, totalRow, [], styledHeaders, ...rows]
+      const ws = XLSX.utils.aoa_to_sheet(sheetData)
+
+      // Merge title row across all columns
+      ws['!merges'] = [
+        { s: { r: 0, c: 0 }, e: { r: 0, c: headers.length - 1 } },
+        { s: { r: 1, c: 0 }, e: { r: 1, c: headers.length - 1 } },
+        { s: { r: 2, c: 0 }, e: { r: 2, c: headers.length - 1 } },
+      ]
+
+      // Set column widths for good readability
+      ws['!cols'] = [
+        { wch: 28 }, // Nome
+        { wch: 24 }, // Empresa
+        { wch: 18 }, // Telefone
+        { wch: 30 }, // Email
+        { wch: 20 }, // Etapa
+        { wch: 22 }, // Responsável
+        { wch: 14 }, // Dias na Etapa
+        { wch: 18 }, // Último Follow-up
+        { wch: 14 }, // Status
+        { wch: 16 }, // Data Cadastro
+      ]
+
+      // Set row heights
+      ws['!rows'] = [
+        { hpt: 30 }, // Title
+        { hpt: 18 }, // Date
+        { hpt: 18 }, // Total
+        { hpt: 10 }, // Blank spacer
+        { hpt: 28 }, // Headers
+        ...rows.map(() => ({ hpt: 22 })),
+      ]
+
       const wb = XLSX.utils.book_new()
       XLSX.utils.book_append_sheet(wb, ws, 'Contatos')
       XLSX.writeFile(wb, `relatorio_${funnelName}_${new Date().toISOString().split('T')[0]}.xlsx`)
