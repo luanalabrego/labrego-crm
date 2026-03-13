@@ -34,7 +34,7 @@ import {
   CheckBadgeIcon,
   UsersIcon,
 } from '@heroicons/react/24/outline'
-import { formatWhatsAppNumber } from '@/lib/format'
+import { formatWhatsAppNumber, maskPhone, maskDocument } from '@/lib/format'
 import MemberSelector from '@/components/MemberSelector'
 import { useVisibleFunnels } from '@/hooks/useVisibleFunnels'
 
@@ -1967,7 +1967,7 @@ export default function ContatosPage() {
                     <input
                       type="text"
                       value={form.phone}
-                      onChange={(e) => setForm({ ...form, phone: e.target.value })}
+                      onChange={(e) => setForm({ ...form, phone: maskPhone(e.target.value) })}
                       placeholder="(00) 00000-0000"
                       className="w-full pl-10 pr-4 py-2.5 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-primary-500/20 focus:border-primary-400 transition-all"
                     />
@@ -2007,7 +2007,7 @@ export default function ContatosPage() {
                   <input
                     type="text"
                     value={form.document}
-                    onChange={(e) => setForm({ ...form, document: e.target.value })}
+                    onChange={(e) => setForm({ ...form, document: maskDocument(e.target.value) })}
                     placeholder="00.000.000/0000-00"
                     className="w-full px-4 py-2.5 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-primary-500/20 focus:border-primary-400 transition-all"
                   />
