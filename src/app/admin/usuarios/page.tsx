@@ -113,6 +113,7 @@ export default function UsuariosPage() {
 
   // Edit modal
   const [editMember, setEditMember] = useState<OrgMember | null>(null)
+  const [editDisplayName, setEditDisplayName] = useState('')
   const [editRole, setEditRole] = useState<RolePreset>('viewer')
   const [editPermissions, setEditPermissions] = useState<MemberPermissions>(defaultPermissions())
   const [editLoading, setEditLoading] = useState(false)
@@ -203,6 +204,7 @@ export default function UsuariosPage() {
 
   const openEditModal = (member: OrgMember) => {
     setEditMember(member)
+    setEditDisplayName(member.displayName || '')
     const validRoles: RolePreset[] = ['admin', 'manager', 'seller', 'viewer']
     const role = validRoles.includes(member.role as RolePreset)
       ? (member.role as RolePreset)
@@ -248,13 +250,18 @@ export default function UsuariosPage() {
       toast.error('Selecione um cargo valido')
       return
     }
+    if (!editDisplayName.trim()) {
+      toast.error('O nome do usuario e obrigatorio')
+      return
+    }
     setEditLoading(true)
     try {
       await updateDoc(doc(db, 'organizations', orgId, 'members', editMember.id), {
+        displayName: editDisplayName.trim(),
         role: editRole,
         permissions: editPermissions,
       })
-      toast.success(`Permissoes de ${editMember.displayName} atualizadas`)
+      toast.success(`${editDisplayName.trim()} atualizado com sucesso`)
       setEditMember(null)
     } catch (error) {
       console.error('Error updating member:', error)
@@ -445,7 +452,7 @@ export default function UsuariosPage() {
                                 type="button"
                                 onClick={() => openEditModal(m)}
                                 className="rounded-lg p-1.5 text-gray-500 hover:bg-primary-50 hover:text-primary-700 transition"
-                                title="Editar permissoes"
+                                title="Editar usuario"
                               >
                                 <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                                   <path strokeLinecap="round" strokeLinejoin="round" d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L10.582 16.07a4.5 4.5 0 01-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 011.13-1.897l8.932-8.931z" />
@@ -647,9 +654,24 @@ export default function UsuariosPage() {
             <div className="space-y-5">
               <div>
                 <h3 className="text-lg font-semibold text-gray-900">
-                  Editar permissoes - {editMember.displayName}
+                  Editar usuario - {editMember.displayName}
                 </h3>
                 <p className="text-sm text-gray-500 mt-0.5">{editMember.email}</p>
+              </div>
+
+              {/* Display name */}
+              <div>
+                <label htmlFor="edit-displayName" className={ui.label}>
+                  Nome
+                </label>
+                <input
+                  id="edit-displayName"
+                  type="text"
+                  value={editDisplayName}
+                  onChange={(e) => setEditDisplayName(e.target.value)}
+                  placeholder="Nome do usuario"
+                  className={ui.input}
+                />
               </div>
 
               {/* Role selector */}
@@ -758,7 +780,7 @@ export default function UsuariosPage() {
                       Salvando...
                     </>
                   ) : (
-                    'Salvar permissoes'
+                    'Salvar alteracoes'
                   )}
                 </button>
               </div>
