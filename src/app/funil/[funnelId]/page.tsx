@@ -269,7 +269,7 @@ export default function FunilDetailPage() {
   const funnelId = params.funnelId as string
   const { userEmail, orgId, member } = useCrmUser()
   const credits = useCredits(orgId || undefined)
-  const { viewScope, can } = usePermissions()
+  const { viewScope, can, role } = usePermissions()
   const { allowedMemberIds } = useAllowedMemberIds()
   const { filterStages } = useVisibleStages(funnelId)
   const { guard, showDialog: showFreePlanDialog, closeDialog: closeFreePlanDialog, isBlocked: isPlanBlocked } = useFreePlanGuard()
@@ -3794,8 +3794,8 @@ export default function FunilDetailPage() {
                 <ChevronDownIcon className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
               </div>
 
-                {/* Responsible filter for admin/manager */}
-                {viewScope === 'all' && (
+                {/* Responsible filter (admin only) */}
+                {role === 'admin' && (
                   <select
                     value={filterAssignedTo}
                     onChange={(e) => setFilterAssignedTo(e.target.value)}
@@ -3803,10 +3803,12 @@ export default function FunilDetailPage() {
                   >
                     <option value="">Todos responsáveis</option>
                     <option value="__none__">Sem responsável</option>
-                    {Array.from(new Set(clients.filter(c => c.assignedToName).map(c => JSON.stringify({ id: c.assignedTo, name: c.assignedToName })))).map(json => {
-                      const m = JSON.parse(json) as { id: string; name: string }
-                      return <option key={m.id} value={m.id}>{m.name}</option>
-                    })}
+                    {orgMembers
+                      .filter(m => m.role === 'seller' || m.role === 'manager')
+                      .sort((a, b) => a.displayName.localeCompare(b.displayName))
+                      .map(m => (
+                        <option key={m.id} value={m.id}>{m.displayName}</option>
+                      ))}
                   </select>
                 )}
 
