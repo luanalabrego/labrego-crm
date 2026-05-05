@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useMemo, useCallback } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
-import { collection, onSnapshot, doc, setDoc, deleteDoc, updateDoc, addDoc, query, orderBy, getDocs, where, writeBatch } from 'firebase/firestore'
+import { collection, onSnapshot, doc, setDoc, deleteDoc, updateDoc, addDoc, query, orderBy, getDocs, where, writeBatch, limit, startAfter, QueryDocumentSnapshot, DocumentData } from 'firebase/firestore'
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage'
 import { db, storage } from '@/lib/firebaseClient'
 import { useCrmUser } from '@/contexts/CrmUserContext'
@@ -192,10 +192,14 @@ export default function ContatosPage() {
   const { viewScope, can } = usePermissions()
   const { allowedMemberIds } = useAllowedMemberIds()
   const { guard, showDialog: showFreePlanDialog, closeDialog: closeFreePlanDialog, isBlocked: isPlanBlocked } = useFreePlanGuard()
+  const CLIENTS_PAGE_SIZE = 100
   const [clients, setClients] = useState<Cliente[]>([])
   const [funnelStages, setFunnelStages] = useState<FunnelStage[]>([])
   const [costCenters, setCostCenters] = useState<CostCenter[]>([])
   const [loading, setLoading] = useState(true)
+  const [lastClientDoc, setLastClientDoc] = useState<QueryDocumentSnapshot<DocumentData> | null>(null)
+  const [hasMoreClients, setHasMoreClients] = useState(false)
+  const [loadingMore, setLoadingMore] = useState(false)
 
   // Table state
   const [sortConfig, setSortConfig] = useState<SortConfig>({ key: 'name', direction: 'asc' })
@@ -287,15 +291,27 @@ export default function ContatosPage() {
   useEffect(() => {
     if (!orgId) return
 
-    const unsubClients = onSnapshot(query(collection(db, 'clients'), where('orgId', '==', orgId)), (snap) => {
-      const data = snap.docs.map((d) => ({ id: d.id, ...d.data() })) as Cliente[]
-      setClients(data)
-      setLoading(false)
-    }, (error) => {
-      console.warn('[ContatosPage] Firestore error:', error.message)
-      setClients([])
-      setLoading(false)
-    })
+    const loadClients = async () => {
+      try {
+        const q = query(
+          collection(db, 'clients'),
+          where('orgId', '==', orgId),
+          orderBy('createdAt', 'desc'),
+          limit(CLIENTS_PAGE_SIZE)
+        )
+        const snap = await getDocs(q)
+        const data = snap.docs.map((d) => ({ id: d.id, ...d.data() })) as Cliente[]
+        setClients(data)
+        setLastClientDoc(snap.docs[snap.docs.length - 1] || null)
+        setHasMoreClients(snap.docs.length === CLIENTS_PAGE_SIZE)
+      } catch (error: unknown) {
+        console.warn('[ContatosPage] Firestore error:', error instanceof Error ? error.message : error)
+        setClients([])
+      } finally {
+        setLoading(false)
+      }
+    }
+    loadClients()
 
     const unsubStages = onSnapshot(query(collection(db, 'funnelStages'), where('orgId', '==', orgId)), (snap) => {
       const data = snap.docs.map((d) => ({ id: d.id, ...d.data() })) as FunnelStage[]
@@ -333,12 +349,34 @@ export default function ContatosPage() {
     })
 
     return () => {
-      unsubClients()
       unsubStages()
       unsubCostCenters()
       unsubCadence()
     }
   }, [orgId])
+
+  const loadMoreClients = useCallback(async () => {
+    if (!orgId || !lastClientDoc || loadingMore) return
+    setLoadingMore(true)
+    try {
+      const q = query(
+        collection(db, 'clients'),
+        where('orgId', '==', orgId),
+        orderBy('createdAt', 'desc'),
+        startAfter(lastClientDoc),
+        limit(CLIENTS_PAGE_SIZE)
+      )
+      const snap = await getDocs(q)
+      const data = snap.docs.map((d) => ({ id: d.id, ...d.data() })) as Cliente[]
+      setClients(prev => [...prev, ...data])
+      setLastClientDoc(snap.docs[snap.docs.length - 1] || null)
+      setHasMoreClients(snap.docs.length === CLIENTS_PAGE_SIZE)
+    } catch (error: unknown) {
+      console.warn('[ContatosPage] Load more error:', error instanceof Error ? error.message : error)
+    } finally {
+      setLoadingMore(false)
+    }
+  }, [orgId, lastClientDoc, loadingMore])
 
   // Check for 'novo' parameter to open modal automatically
   useEffect(() => {
@@ -2571,6 +2609,19 @@ export default function ContatosPage() {
                 </tbody>
               </table>
             </div>
+
+            {/* Load more from Firestore */}
+            {hasMoreClients && (
+              <div className="px-4 py-2 border-t border-slate-100 dark:border-white/10 flex justify-center">
+                <button
+                  onClick={loadMoreClients}
+                  disabled={loadingMore}
+                  className="text-sm text-primary-600 hover:text-primary-700 font-medium disabled:opacity-50"
+                >
+                  {loadingMore ? 'Carregando...' : `Carregar mais contatos (${clients.length} carregados)`}
+                </button>
+              </div>
+            )}
 
             {/* Pagination */}
             {totalPages > 1 && (

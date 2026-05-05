@@ -111,27 +111,30 @@ export default function FunnelHubPage() {
     return () => unsub()
   }, [orgId])
 
-  // Load clients for counting
+  // Load clients for counting (one-time fetch, no real-time needed for summary)
   useEffect(() => {
     if (!orgId) return
-    const unsub = onSnapshot(query(collection(db, 'clients'), where('orgId', '==', orgId)), (snap) => {
-      setAllClients(snap.docs.map(d => {
-        const data = d.data()
-        return {
-          id: d.id,
-          funnelStage: data.funnelStage,
-          funnelId: data.funnelId,
-          funnelStageUpdatedAt: data.funnelStageUpdatedAt,
-          assignedTo: data.assignedTo,
-        }
-      }))
-      setLoadingData(false)
-    }, (error) => {
-      console.warn('[FunnelHubPage] Firestore error:', error.message)
-      setAllClients([])
-      setLoadingData(false)
-    })
-    return () => unsub()
+    const fetchClients = async () => {
+      try {
+        const snap = await getDocs(query(collection(db, 'clients'), where('orgId', '==', orgId)))
+        setAllClients(snap.docs.map(d => {
+          const data = d.data()
+          return {
+            id: d.id,
+            funnelStage: data.funnelStage,
+            funnelId: data.funnelId,
+            funnelStageUpdatedAt: data.funnelStageUpdatedAt,
+            assignedTo: data.assignedTo,
+          }
+        }))
+      } catch (error) {
+        console.warn('[FunnelHubPage] Firestore error:', error instanceof Error ? error.message : error)
+        setAllClients([])
+      } finally {
+        setLoadingData(false)
+      }
+    }
+    fetchClients()
   }, [orgId])
 
   // Load ICP profiles

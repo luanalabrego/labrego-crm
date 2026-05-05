@@ -187,22 +187,21 @@ export default function ProjecaoVendasPage() {
     return () => unsub()
   }, [orgId])
 
-  // Load clients
+  // Load clients (one-time fetch, no real-time needed for projections)
   useEffect(() => {
     if (!orgId) return
-    const q = query(collection(db, 'clients'), where('orgId', '==', orgId))
-    const unsub = onSnapshot(
-      q,
-      (snap) => {
+    const fetchClients = async () => {
+      try {
+        const q = query(collection(db, 'clients'), where('orgId', '==', orgId))
+        const snap = await getDocs(q)
         setClients(snap.docs.map(d => ({ id: d.id, ...d.data() } as Cliente)))
-        setLoading(false)
-      },
-      (err) => {
-        console.error('Clients listener error:', err)
+      } catch (err) {
+        console.error('Clients fetch error:', err)
+      } finally {
         setLoading(false)
       }
-    )
-    return () => unsub()
+    }
+    fetchClients()
   }, [orgId])
 
   // Filter clients: dealValue > 0 OR probability > 0, then apply user filters

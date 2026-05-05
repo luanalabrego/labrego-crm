@@ -181,19 +181,19 @@ async function enrollUnenrolledContacts(
 
   const now = new Date().toISOString()
 
-  // Single query — load all org clients and filter in code to avoid composite index
-  const clientsSnap = await db.collection('clients')
-    .where('orgId', '==', orgId)
-    .get()
-
-  console.log(`[CADENCE] Org ${orgId}: ${clientsSnap.size} total contacts`)
+  // Query per stage — only load clients in stages that have cadence steps (avoids loading entire org)
+  let totalChecked = 0
 
   for (const [stageId, firstStep] of stageFirstSteps) {
-    // Filter contacts in this stage without cadence enrollment
-    const inStage = clientsSnap.docs.filter(d => d.data().funnelStage === stageId)
-    const unenrolled = inStage.filter(d => !d.data().currentCadenceStepId)
+    const stageClientsSnap = await db.collection('clients')
+      .where('orgId', '==', orgId)
+      .where('funnelStage', '==', stageId)
+      .get()
 
-    console.log(`[CADENCE] Org ${orgId}: stage ${stageId} — ${inStage.length} contacts in stage, ${unenrolled.length} unenrolled`)
+    totalChecked += stageClientsSnap.size
+    const unenrolled = stageClientsSnap.docs.filter(d => !d.data().currentCadenceStepId)
+
+    console.log(`[CADENCE] Org ${orgId}: stage ${stageId} — ${stageClientsSnap.size} contacts in stage, ${unenrolled.length} unenrolled`)
 
     if (unenrolled.length === 0) continue
 
@@ -260,12 +260,13 @@ async function processOrg(
     })
   })
 
-  // Find eligible contacts — single-field query to avoid composite index requirement
+  // Only load clients with active cadence step (avoids loading entire org)
   type ContactDoc = Record<string, unknown> & { id: string }
   const eligible: { contact: ContactDoc; step: CadenceStep; stage: { id: string; name: string; funnelId: string; callStartHour?: string; callEndHour?: string; maxCallsPerDay?: number } }[] = []
 
   const clientsSnap = await db.collection('clients')
     .where('orgId', '==', orgId)
+    .where('currentCadenceStepId', '>', '')
     .get()
 
   let noStepId = 0
