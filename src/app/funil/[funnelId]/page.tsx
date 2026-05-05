@@ -27,7 +27,7 @@ import {
   writeBatch,
 } from 'firebase/firestore'
 import { db, storage } from '@/lib/firebaseClient'
-import { ref, uploadBytes, getDownloadURL } from 'firebase/storage'
+import { ref, uploadBytes, getDownloadURL, deleteObject } from 'firebase/storage'
 import { useCrmUser } from '@/contexts/CrmUserContext'
 import { useCredits } from '@/hooks/useCredits'
 import type { OrgMember } from '@/types/organization'
@@ -85,6 +85,7 @@ import {
   DocumentDuplicateIcon,
   ArrowDownTrayIcon,
   BoltIcon,
+  PaperClipIcon,
 } from '@heroicons/react/24/outline'
 import { toast } from 'sonner'
 
@@ -189,6 +190,17 @@ type CostCenter = {
   id: string
   code: number
   name: string
+}
+
+type FileDoc = {
+  id: string
+  name: string
+  url: string
+  folderId: string | null
+  size?: number
+  type?: string
+  uploadedAt: string
+  source?: string
 }
 
 type ViewMode = 'kanban' | 'table' | 'calendar' | 'activity'
@@ -551,6 +563,12 @@ export default function FunilDetailPage() {
   const [clientProposals, setClientProposals] = useState<Array<{ id: string; number?: number; projectName?: string; status?: string; total?: number; createdAt?: string }>>([])
   const [loadingProposals, setLoadingProposals] = useState(false)
 
+  // Client documents for lateral panel
+  const [clientFiles, setClientFiles] = useState<FileDoc[]>([])
+  const [loadingFiles, setLoadingFiles] = useState(false)
+  const [uploadingFile, setUploadingFile] = useState(false)
+  const [deletingFileId, setDeletingFileId] = useState<string | null>(null)
+
   // Team members for responsible selector (Story 11.4)
   const [orgMembers, setOrgMembers] = useState<OrgMember[]>([])
   const [showResponsibleDropdown, setShowResponsibleDropdown] = useState(false)
@@ -891,6 +909,25 @@ export default function FunilDetailPage() {
     })
     return unsub
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedClient?.id])
+
+  // Load documents for selected client
+  useEffect(() => {
+    if (!selectedClient) {
+      setClientFiles([])
+      return
+    }
+    setLoadingFiles(true)
+    const filesRef = collection(db, 'clients', selectedClient.id, 'files')
+    getDocs(filesRef).then((snap) => {
+      const docs = snap.docs.map(d => ({ id: d.id, ...d.data() } as FileDoc))
+      docs.sort((a, b) => (b.uploadedAt || '').localeCompare(a.uploadedAt || ''))
+      setClientFiles(docs)
+    }).catch((error) => {
+      console.warn('[FunnelDetailPage] Error loading files:', error.message)
+    }).finally(() => {
+      setLoadingFiles(false)
+    })
   }, [selectedClient?.id])
 
   // Get stage color
@@ -2510,6 +2547,61 @@ export default function FunilDetailPage() {
       setEditingComments(false)
     } catch (error) {
       console.error('Error saving speech:', error)
+    }
+  }
+
+  // Upload document from funnel panel
+  const handleDocUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (isPlanBlocked || !file || !selectedClient) return
+    setUploadingFile(true)
+    try {
+      const ext = file.name.split('.').pop()
+      const storageRef = ref(storage, `clients/${selectedClient.id}/files/${Date.now()}.${ext}`)
+      await uploadBytes(storageRef, file)
+      const url = await getDownloadURL(storageRef)
+      const fileRef = doc(collection(db, 'clients', selectedClient.id, 'files'))
+      const newFile: Omit<FileDoc, 'id'> = {
+        name: file.name,
+        url,
+        folderId: null,
+        size: file.size,
+        type: file.type,
+        uploadedAt: new Date().toISOString(),
+      }
+      await setDoc(fileRef, newFile)
+      setClientFiles((prev) => [{ id: fileRef.id, ...newFile }, ...prev])
+      toast.success('Arquivo enviado com sucesso')
+    } catch (error) {
+      console.error('Error uploading file:', error)
+      toast.error('Erro ao fazer upload do arquivo')
+    } finally {
+      setUploadingFile(false)
+      e.target.value = ''
+    }
+  }
+
+  // Delete document from funnel panel
+  const handleDocDelete = async (fileDoc: FileDoc) => {
+    if (isPlanBlocked || !selectedClient) return
+    setDeletingFileId(fileDoc.id)
+    try {
+      if (fileDoc.url && fileDoc.url.includes('firebase')) {
+        try {
+          const storageRef = ref(storage, fileDoc.url)
+          await deleteObject(storageRef)
+        } catch {
+          // File might not exist in storage
+        }
+      }
+      await deleteDoc(doc(db, 'clients', selectedClient.id, 'files', fileDoc.id))
+      setClientFiles((prev) => prev.filter((f) => f.id !== fileDoc.id))
+      toast.success('Arquivo excluído')
+    } catch (error) {
+      console.error('Error deleting file:', error)
+      toast.error('Erro ao excluir arquivo')
+    } finally {
+      setDeletingFileId(null)
     }
   }
 
@@ -7196,6 +7288,79 @@ export default function FunilDetailPage() {
                         </button>
                       )
                     })}
+                  </div>
+                )}
+              </div>
+
+              {/* Documents Section */}
+              <div className="p-4 sm:p-6 border-b border-slate-100">
+                <div className="flex items-center justify-between mb-3">
+                  <h4 className="text-sm font-semibold text-slate-700 dark:text-slate-300 flex items-center gap-2">
+                    <PaperClipIcon className="w-4 h-4 text-slate-500" />
+                    Documentos
+                  </h4>
+                  <label className="flex items-center gap-1 px-2.5 py-1 bg-slate-100 text-slate-700 rounded-lg text-xs font-medium hover:bg-slate-200 transition-colors cursor-pointer">
+                    <input
+                      type="file"
+                      onChange={handleDocUpload}
+                      className="sr-only"
+                      disabled={uploadingFile}
+                    />
+                    {uploadingFile ? (
+                      <div className="w-3 h-3 border-2 border-slate-300 border-t-slate-600 rounded-full animate-spin" />
+                    ) : (
+                      <PlusIcon className="w-3 h-3" />
+                    )}
+                    Upload
+                  </label>
+                </div>
+                {loadingFiles ? (
+                  <div className="flex items-center justify-center py-4">
+                    <div className="w-5 h-5 border-2 border-slate-200 border-t-slate-600 rounded-full animate-spin" />
+                  </div>
+                ) : clientFiles.length === 0 ? (
+                  <div className="p-4 bg-slate-50 dark:bg-white/5 rounded-xl text-center">
+                    <p className="text-xs text-slate-400">Nenhum documento encontrado</p>
+                  </div>
+                ) : (
+                  <div className="space-y-1.5 max-h-48 overflow-y-auto">
+                    {clientFiles.map((file) => (
+                      <div
+                        key={file.id}
+                        className="flex items-center gap-2 p-2 bg-slate-50 dark:bg-white/5 rounded-lg border border-slate-100 group"
+                      >
+                        <DocumentTextIcon className="w-4 h-4 text-slate-400 flex-shrink-0" />
+                        <div className="flex-1 min-w-0">
+                          <p className="text-xs font-medium text-slate-700 dark:text-slate-300 truncate">{file.name}</p>
+                          {file.uploadedAt && (
+                            <p className="text-[10px] text-slate-400">{new Date(file.uploadedAt).toLocaleDateString('pt-BR')}</p>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                          <a
+                            href={file.url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="p-1 hover:bg-slate-200 rounded transition-colors"
+                            title="Download"
+                          >
+                            <ArrowDownTrayIcon className="w-3.5 h-3.5 text-slate-500" />
+                          </a>
+                          <button
+                            onClick={() => handleDocDelete(file)}
+                            disabled={deletingFileId === file.id}
+                            className="p-1 hover:bg-red-100 rounded transition-colors"
+                            title="Excluir"
+                          >
+                            {deletingFileId === file.id ? (
+                              <div className="w-3.5 h-3.5 border-2 border-red-200 border-t-red-500 rounded-full animate-spin" />
+                            ) : (
+                              <TrashIcon className="w-3.5 h-3.5 text-red-400" />
+                            )}
+                          </button>
+                        </div>
+                      </div>
+                    ))}
                   </div>
                 )}
               </div>
