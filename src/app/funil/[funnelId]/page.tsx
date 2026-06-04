@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
-import { useRouter, useParams } from 'next/navigation'
+import { useRouter, useParams, useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 import Image from 'next/image'
 import {
@@ -278,6 +278,8 @@ const getColorByIndex = (index: number) => {
 export default function FunilDetailPage() {
   const router = useRouter()
   const params = useParams()
+  const searchParamsHook = useSearchParams()
+  const highlightClientId = searchParamsHook.get('highlight')
   const funnelId = params.funnelId as string
   const { userEmail, orgId, member } = useCrmUser()
   const credits = useCredits(orgId || undefined)
@@ -285,6 +287,18 @@ export default function FunilDetailPage() {
   const { allowedMemberIds } = useAllowedMemberIds()
   const { filterStages } = useVisibleStages(funnelId)
   const { guard, showDialog: showFreePlanDialog, closeDialog: closeFreePlanDialog, isBlocked: isPlanBlocked } = useFreePlanGuard()
+
+  // Scroll-to-highlight: when ?highlight=<clientId> is present, scroll to that card
+  useEffect(() => {
+    if (!highlightClientId) return
+    const timer = setTimeout(() => {
+      const el = document.getElementById(`client-card-${highlightClientId}`)
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      }
+    }, 800)
+    return () => clearTimeout(timer)
+  }, [highlightClientId])
 
   // Responsible filter (admin/manager)
   const [filterAssignedTo, setFilterAssignedTo] = useState<string>('')
@@ -5137,7 +5151,11 @@ export default function FunilDetailPage() {
                                       const realIndex = ((paginatedData.currentPage - 1) * ITEMS_PER_PAGE) + index
 
                                       return (
-                                        <div key={client.id} className={`relative ${bulkSelectMode ? 'flex items-start gap-2' : ''}`}>
+                                        <div
+                                          key={client.id}
+                                          id={`client-card-${client.id}`}
+                                          className={`relative ${bulkSelectMode ? 'flex items-start gap-2' : ''} ${highlightClientId === client.id ? 'ring-2 ring-blue-500 rounded-xl' : ''}`}
+                                        >
                                           {bulkSelectMode && (
                                             <input
                                               type="checkbox"

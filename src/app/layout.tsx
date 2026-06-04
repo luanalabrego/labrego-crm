@@ -28,6 +28,7 @@ import FreePlanExpiredGate from '@/components/FreePlanExpiredGate'
 import CookieConsent from '@/components/CookieConsent'
 import PageAccessGuard from '@/components/PageAccessGuard'
 import NotificationBell from '@/components/NotificationBell'
+import GlobalFunnelSearch from '@/components/GlobalFunnelSearch'
 // useSuperAdmin removido — usado apenas no CrmSidebar
 
 const inter = Inter({
@@ -680,6 +681,11 @@ export default function RootLayout({ children }: CrmLayoutProps) {
                     </>
                   )}
                 </div>
+
+                {/* Global CRM Search — visible only on /funil routes */}
+                {pathname.startsWith('/funil') && (
+                  <GlobalFunnelSearch orgId={orgId} />
+                )}
 
                 {/* Right side */}
                 <div className="flex items-center gap-3">
